@@ -131,8 +131,10 @@ test('calcularRetencionSugerida: null en categoría "otro" (sin tarifa confirmad
 
 // ---------- calcularRetencionSugerida: rango declarante/no declarante ----------
 
-test('calcularRetencionSugerida (servicios): sin saber si declara renta, devuelve el rango completo', () => {
-  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, nit_cc: '900111222', fecha_factura: '01/09/2026' };
+test('calcularRetencionSugerida (servicios): persona natural sin saber si declara renta, devuelve el rango completo', () => {
+  // Cédula (persona natural): no se sabe si declara. Un NIT de persona
+  // jurídica (9 dígitos, empieza por 8 o 9) siempre se trata como declarante.
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, nit_cc: '71261773', fecha_factura: '01/09/2026' };
   const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, null, {});
   assert.equal(r.bajo, Math.round(1000000 * 0.04));
   assert.equal(r.alto, Math.round(1000000 * 0.06));
@@ -452,4 +454,18 @@ test('PUC: compras ya no preselecciona Inventarios y no quedan códigos inexiste
   assert.equal(RA.SUBCUENTAS_GASTO.compras[0][0], '519595');
   const todos = Object.values(RA.SUBCUENTAS_GASTO).flat().map(([c]) => c);
   for (const inexistente of ['513528', '513560', '513565', '513570', '513545']) assert.equal(todos.includes(inexistente), false);
+});
+
+// ---------- Persona jurídica = declarante (tarifa exacta) ----------
+test('esNitPersonaJuridica: NIT de empresa sí, cédula no', () => {
+  assert.equal(RA.esNitPersonaJuridica('901627469'), true);   // GAMOEZ S.A.S.
+  assert.equal(RA.esNitPersonaJuridica('890.900.608-9'), true); // Almacenes Éxito
+  assert.equal(RA.esNitPersonaJuridica('71261773'), false);   // cédula 8 dígitos
+  assert.equal(RA.esNitPersonaJuridica('1017197367'), false); // cédula 10 dígitos
+});
+
+test('compras a persona jurídica: tarifa exacta de declarante (GAMOEZ)', () => {
+  const s = RA.calcularRetencionSugerida({ categoria_concepto: 'compras', valor_sin_iva: 619534, valor_iva: 117712, nit_cc: '901627469', fecha_factura: '06/07/2026' }, PH, {}, null);
+  assert.equal(s.mismaTarifa, true);
+  assert.equal(s.bajo, 15488); // 2,5% (antes rango 15.488 - 21.684)
 });

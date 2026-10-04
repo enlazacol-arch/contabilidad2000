@@ -372,6 +372,11 @@ const CATEGORIA_CONCEPTO_LABELS = {
 // agente_retencion_iva } -- o null/undefined si el contador nunca
 // marcó nada para ese NIT (en ese caso, se cae de vuelta a lo que la
 // IA leyó en el documento, como antes).
+function esNitPersonaJuridica(nit) {
+  const digitos = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
+  return /^[89]\d{8}$/.test(digitos);
+}
+
 function perfilFiscalEfectivo(inv, perfilTercero) {
   const regimenSimple = !!(perfilTercero && perfilTercero.regimen_simple) ||
     inv.regimen_simple === true || inv.regimen_simple === 'true';
@@ -387,7 +392,12 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // donde la tarifa depende de si el proveedor declara renta o no. Si
   // nadie lo marcó todavía, se sigue mostrando el rango como antes --
   // "no se sabe" nunca se trata como "no declara".
-  const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta);
+  // Una persona jurídica siempre declara renta: si el NIT tiene la forma
+  // de una persona jurídica (9 dígitos que empiezan por 8 o 9), se usa la
+  // tarifa de declarante aunque nadie lo haya marcado en la ficha. Las
+  // cédulas de personas naturales no tienen esa forma (hasta 8 dígitos,
+  // o 10 que empiezan por 1), así que para ellas sigue el rango.
+  const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta) || esNitPersonaJuridica(inv.nit_cc);
   // Art. 383: lo marca el contador en la ficha de Terceros fiscales (a
   // partir de la certificación del contratista), o lo detecta la IA
   // cuando el propio documento lo dice -- muchas cuentas de cobro de
@@ -1355,6 +1365,7 @@ if (typeof module !== 'undefined' && module.exports) {
     anioDeFechaFactura,
     umbralPesos,
     perfilFiscalEfectivo,
+    esNitPersonaJuridica,
     calcularRetencionCategoriaLinea,
     calcularRetencionSugerida,
     calcularRetencionSugeridaPorItems,
