@@ -200,9 +200,45 @@ function anioDeFechaFactura(fechaFactura) {
 }
 
 // Umbral en pesos para una categoría, según la fecha de la factura.
+// ---------- Bases mínimas según la fecha (Decreto 0572 de 2025) ----------
+// TARIFAS_RETENCION trae las bases del Decreto 0572 de 2025 (compras 10
+// UVT, servicios 2 UVT). Pero ese decreto NO rigió todo el tiempo:
+//   - hasta el 31/05/2025: tabla anterior (aún no regía el 572);
+//   - 01/06/2025 a 07/05/2026: Decreto 572;
+//   - 08/05/2026 a 30/06/2026: tabla anterior otra vez -- el Consejo de
+//     Estado suspendió provisionalmente los arts. 2 a 8 del 572 (auto del
+//     07/05/2026; DIAN, Boletín Especial 070 del 08/05/2026);
+//   - desde 01/07/2026: Decreto 572 otra vez -- la suspensión se revocó
+//     el 02/06/2026 (Auto 30229), con efecto desde el primer día del mes
+//     siguiente a su ejecutoria.
+// Fuentes (consultadas el 04/10/2026): actualicese.com, itscontable.com,
+// siemprealdia.co, rioconsultores.com (Boletines 043 y 049).
+// El 572 cambió BASES, no tarifas. Aquí solo se revierten las bases que
+// las fuentes confirman: compras 27 UVT y servicios 4 UVT (servicios
+// generales y los servicios con tarifa propia que comparten esa base).
+const BASES_TABLA_ANTERIOR_572_UVT = {
+  compras: 27,
+  servicios: 4,
+  transporte_carga: 4,
+  vigilancia_aseo: 4,
+  servicios_temporales: 4,
+  hoteles_restaurantes: 4,
+};
+function rigeTablaAnteriorAl572(fechaFactura) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(fechaFactura || '').trim());
+  if (!m) return false; // sin fecha clara: tabla vigente hoy (572)
+  const fecha = Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1]);
+  return fecha < 20250601 || (fecha >= 20260508 && fecha <= 20260630);
+}
+
 function umbralPesos(configBase, fechaFactura) {
   const anio = anioDeFechaFactura(fechaFactura);
-  return Math.round((configBase.umbralUvt || 0) * valorUvt(anio));
+  let uvt = configBase.umbralUvt || 0;
+  if (rigeTablaAnteriorAl572(fechaFactura)) {
+    const categoria = Object.keys(TARIFAS_RETENCION).find((k) => TARIFAS_RETENCION[k] === configBase);
+    if (categoria && BASES_TABLA_ANTERIOR_572_UVT[categoria] !== undefined) uvt = BASES_TABLA_ANTERIOR_572_UVT[categoria];
+  }
+  return Math.round(uvt * valorUvt(anio));
 }
 
 // Cuentas PUC fijas para Rete IVA y Rete ICA -- no dependen de la
@@ -1467,6 +1503,7 @@ if (typeof module !== 'undefined' && module.exports) {
     esUvtDeRespaldo,
     anioDeFechaFactura,
     umbralPesos,
+    rigeTablaAnteriorAl572,
     perfilFiscalEfectivo,
     esNitPersonaJuridica,
     registrarNitsArticulo383,
