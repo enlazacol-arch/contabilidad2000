@@ -477,6 +477,7 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .input:hover, .select:hover, .textarea:hover{ border-color:var(--n-400); }
 .input:focus, .select:focus, .textarea:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
 .input--num{ text-align:right; font-family:var(--font-num); }
+.input--num-font{ font-family:var(--font-num); font-variant-numeric:tabular-nums; }
 .ui-field.has-error .input, .input[aria-invalid="true"]{ border-color:var(--err); }
 .input:disabled, .select:disabled{ background:var(--surface-sunken); color:var(--text-3); cursor:not-allowed; }
 .select{
