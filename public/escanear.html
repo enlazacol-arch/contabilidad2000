@@ -1898,11 +1898,69 @@ function renderResult(data){
       // guardar sin ese dato.
       const nitWarnEl = document.createElement('div');
       nitWarnEl.className = 'digit-warn';
-      nitWarnEl.style.color = '#7A2E1B';
+      nitWarnEl.style.color = 'var(--err)';
       row.appendChild(nitWarnEl);
+      // Cuenta de cobro sin NIT visible: además de digitarlo a mano, se
+      // puede leer desde el RUT del proveedor (misma lectura con IA que
+      // ya usa Clientes) -- pedido de la revisión contable, oct. 2026.
+      const rutInput = document.createElement('input');
+      rutInput.type = 'file';
+      rutInput.accept = 'image/*,application/pdf';
+      rutInput.hidden = true;
+      const rutBtn = document.createElement('button');
+      rutBtn.type = 'button';
+      rutBtn.className = 'btn ghost btn--sm';
+      rutBtn.style.marginTop = '8px';
+      rutBtn.textContent = 'Leer NIT desde el RUT del proveedor';
+      const rutEstado = document.createElement('div');
+      rutEstado.style.marginTop = '6px';
+      rutBtn.addEventListener('click', () => rutInput.click());
+      rutInput.addEventListener('change', () => {
+        const archivo = rutInput.files[0];
+        if (!archivo) return;
+        const lector = new FileReader();
+        lector.onload = async () => {
+          const esPdf = archivo.type === 'application/pdf' || /\.pdf$/i.test(archivo.name);
+          rutBtn.disabled = true;
+          rutBtn.textContent = 'Leyendo RUT...';
+          rutEstado.textContent = '';
+          try {
+            const res = await fetch('/api/extract-rut', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ base64: String(lector.result).split(',')[1], mediaType: archivo.type || (esPdf ? 'application/pdf' : 'image/jpeg'), isPdf: esPdf }),
+            });
+            const rut = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(rut.error || 'No se pudo leer el RUT.');
+            if (!rut.nit) throw new Error('El RUT no muestra el NIT con claridad -- escríbelo a mano.');
+            const poner = (clave, valor) => {
+              const campo = ledger.querySelector(`[data-key="${clave}"]`);
+              if (campo && valor) { campo.value = valor; campo.dispatchEvent(new Event('input', { bubbles: true })); }
+            };
+            poner('nit_cc', String(rut.nit).replace(/[^0-9]/g, ''));
+            poner('dv', rut.dv);
+            poner('nombre_razon_social', String(rut.nombre || '').toLocaleUpperCase('es-CO'));
+            poner('tipo_doc', rut.tipo_persona === 'natural' ? '13' : (rut.tipo_persona === 'juridica' ? '31' : ''));
+            rutEstado.textContent = '✓ NIT completado desde el RUT -- revísalo antes de guardar.';
+            rutEstado.style.color = 'var(--ok)';
+            if (typeof actualizarEstimadosRetencion === 'function') actualizarEstimadosRetencion();
+          } catch (err) {
+            rutEstado.textContent = err.message;
+            rutEstado.style.color = 'var(--err)';
+          } finally {
+            rutBtn.disabled = false;
+            rutBtn.textContent = 'Leer NIT desde el RUT del proveedor';
+            rutInput.value = '';
+          }
+        };
+        lector.readAsDataURL(archivo);
+      });
+      const avisoTexto = document.createElement('span');
+      nitWarnEl.append(avisoTexto, document.createElement('br'), rutBtn, rutInput, rutEstado);
+
       const actualizarAvisoSinNit = () => {
         if (tieneExcepcion({ nit_cc: input.value }, 'sin_nit')) {
-          nitWarnEl.textContent = '⚠ Sin NIT/cédula del emisor -- verifica que el documento realmente no lo traiga antes de guardar. Si lo guardas así, queda bajo tu responsabilidad.';
+          avisoTexto.textContent = '⚠ Sin NIT/cédula del emisor. Si el documento no lo trae, léelo desde el RUT del proveedor o escríbelo a mano arriba. Si lo guardas sin NIT, queda bajo tu responsabilidad.';
           nitWarnEl.classList.add('show');
         } else {
           nitWarnEl.classList.remove('show');
