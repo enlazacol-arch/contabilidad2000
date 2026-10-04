@@ -1965,7 +1965,8 @@ function renderSummary(){
     const sinOpcionesSubcuenta = opcionesEstandarActual.length === 0 && personalizadosActual.length === 0;
     // Subcuenta usada antes con este proveedor (ver subcuentaAprendida()
     // en retenciones.js) -- va antes que la primera opción de la lista.
-    const aprendidaActual = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '';
+    const aprendidaActual = ((typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '') ||
+      (categoriaActual === 'servicios_publicos' && typeof subcuentaServicioPublico === 'function' ? subcuentaServicioPublico(`${d.nombre_razon_social || ''} ${d.concepto || ''}`) : '');
     const subcuentaActual = d.subcuenta_gasto || aprendidaActual || (personalizadosActual.length > 0 ? personalizadosActual[0].codigo : (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : ''));
     if (!d.subcuenta_gasto) d.subcuenta_gasto = subcuentaActual; // fijar el default la primera vez
     const aprendidaFueraDeLista = aprendidaActual && !opcionesEstandarActual.some(([c]) => c === aprendidaActual) && !personalizadosActual.some((p) => p.codigo === aprendidaActual);
@@ -2057,6 +2058,11 @@ function renderSummary(){
         <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
       </div>
       ${item.errorGuardado ? `<div class="fc-mensaje fc-mensaje-error">${escapeHtml(item.errorGuardado)}</div>` : ''}
+      ${tieneExcepcion(item.data, 'nit_por_verificar') ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
+          <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml((listaExcepciones(item.data).find((x) => x.tipo === 'nit_por_verificar') || {}).detalle || '')}</div>
+        </div>
+      ` : ''}
       ${item.pendienteConfirmarSinNit && tieneExcepcion(item.data, 'sin_nit') ? `
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--stamp-soft);border-radius:var(--r-sm);">
           <div style="color:var(--err);font-size:var(--t-13);">⚠ Este documento no trae NIT/cédula del emisor -- verifica si en realidad no aparece (ábrela con "Revisar" para corregirlo). <button type="button" data-role="guardar-sin-nit" data-idx="${idx}" style="margin-left:4px;font-size:var(--t-12);font-weight:600;padding:4px 9px;border-radius:var(--r-sm);border:1px solid var(--err);background:#fff;color:var(--err);cursor:pointer;">Guardar de todas formas</button></div>

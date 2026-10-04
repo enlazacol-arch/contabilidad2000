@@ -1982,6 +1982,31 @@ function renderResult(data){
       };
       actualizarAvisoSinNit();
       input.addEventListener('input', actualizarAvisoSinNit);
+
+      // NIT por verificar (excepciones.js): DV que no corresponde, o un
+      // proveedor ya conocido con otro NIT (aviso_nit, lo pone el
+      // servidor al leer). El aviso del servidor deja de aplicar si el
+      // contador cambia el NIT leído.
+      const nitLeido = input.value;
+      const nitVerifEl = document.createElement('div');
+      nitVerifEl.className = 'digit-warn';
+      nitVerifEl.style.color = 'var(--warn)';
+      row.appendChild(nitVerifEl);
+      const actualizarAvisoVerificacion = () => {
+        const dvInput = ledger.querySelector('[data-key="dv"]');
+        const inv = {
+          nit_cc: input.value,
+          dv: dvInput ? dvInput.value : '',
+          aviso_nit: input.value === nitLeido && currentInvoiceData ? currentInvoiceData.aviso_nit : '',
+        };
+        const exc = (typeof listaExcepciones === 'function' ? listaExcepciones(inv) : []).find((x) => x.tipo === 'nit_por_verificar');
+        nitVerifEl.textContent = exc ? '⚠ ' + exc.detalle : '';
+        nitVerifEl.classList.toggle('show', !!exc);
+      };
+      ledger.addEventListener('input', (e) => {
+        if (e.target && (e.target.dataset.key === 'nit_cc' || e.target.dataset.key === 'dv')) actualizarAvisoVerificacion();
+      });
+      setTimeout(actualizarAvisoVerificacion, 0);
     }
 
     ledger.appendChild(row);
@@ -2099,7 +2124,10 @@ function renderResult(data){
       function preseleccionarSubcuentaAprendida(){
         if (typeof subcuentaAprendida !== 'function') return;
         const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
-        const aprendida = subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
+        let aprendida = subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
+        if (!aprendida && input.value === 'servicios_publicos' && typeof subcuentaServicioPublico === 'function' && currentInvoiceData) {
+          aprendida = subcuentaServicioPublico(`${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}`);
+        }
         if (!aprendida) return;
         if (![...subSelect.options].some((o) => o.value === aprendida)) {
           const opt = document.createElement('option');
