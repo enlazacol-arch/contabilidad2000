@@ -6,120 +6,128 @@
 <title>Enlaza — Mis clientes</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <style>
   .wrap{ max-width:1240px; }
 
   #addForm, #clientList, #clientEmpty{
     --paper-raised:#FFFFFF;
-    --ink:#1D2A32;
-    --ink-soft:#4A5E68;
-    --ink-faint:#8AA0AC;
-    --line:#DCE7EC;
+    --ink:var(--n-900);
+    --ink-soft:var(--n-700);
+    --ink-faint:var(--n-500);
+    --line:var(--n-200);
     color:var(--ink);
   }
 
   #addForm{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    padding:28px; margin-bottom:24px;
-    box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
+    padding:var(--s-6); margin-bottom:var(--s-6);
+    box-shadow:var(--sh-2);
   }
-  #addForm h2{ font-size:17px; font-weight:700; margin:0; font-family:'Archivo',sans-serif; }
+  @media (max-width:600px){ #addForm{ padding:var(--s-4); } }
+  #addForm h2{ font-size:var(--t-18); font-weight:700; margin:0; font-family:var(--font-display); }
 
   .form-section{ margin-top:26px; padding-top:22px; border-top:1px solid var(--line); }
   .form-section:first-of-type{ margin-top:22px; padding-top:0; border-top:none; }
   .form-section-title{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
-    letter-spacing:.08em; color:var(--petroleo-deep); margin-bottom:14px; font-weight:600;
+    font-family:var(--font-ui); font-size:var(--t-12); text-transform:uppercase;
+    letter-spacing:.06em; color:var(--pet-600); margin-bottom:var(--s-3); font-weight:700;
   }
 
-  .form-row{ display:grid; grid-template-columns:2fr 1fr 90px; gap:16px; }
+  .form-row{ display:grid; grid-template-columns:2fr 1fr 90px; gap:var(--s-4); }
+  .form-row > *{ min-width:0; }
   .form-row.cols-4{ grid-template-columns:1fr 1fr 1fr 1fr; }
   .form-row.cols-2{ grid-template-columns:1fr 1fr; }
   @media (max-width:760px){ .form-row, .form-row.cols-4{ grid-template-columns:1fr 1fr; } }
+  @media (max-width:480px){ .form-row, .form-row.cols-4, .form-row.cols-2{ grid-template-columns:1fr; } }
 
-  .field{ display:flex; flex-direction:column; gap:8px; }
+  .field{ display:flex; flex-direction:column; gap:6px; }
   .field label{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
-    letter-spacing:.05em; color:var(--ink-faint);
+    font-family:var(--font-ui); font-size:var(--t-13); font-weight:600; color:var(--text-2);
   }
   .field input, .field select{
-    border:1px solid var(--line); border-radius:7px; padding:12px 13px;
-    font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink);
+    min-height:40px; border:1px solid var(--border-strong); border-radius:var(--r-sm); padding:var(--s-2) var(--s-3);
+    font-family:inherit; font-size:var(--t-14); background:var(--surface); color:var(--text); width:100%;
+    transition:border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
   }
-  .field input:focus, .field select:focus{ outline:none; border-color:var(--petroleo); }
+  .field input:hover, .field select:hover{ border-color:var(--n-400); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
 
   .resp-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; }
   @media (max-width:600px){ .resp-grid{ grid-template-columns:1fr; } }
   .resp-check{
-    display:flex; align-items:flex-start; gap:8px; font-size:13px; color:var(--ink); cursor:pointer;
+    display:flex; align-items:flex-start; gap:8px; font-size:var(--t-13); color:var(--ink); cursor:pointer;
   }
-  .resp-check input{ width:16px; height:16px; accent-color:var(--petroleo); cursor:pointer; margin-top:1px; flex-shrink:0; }
-  .resp-check .resp-desc{ font-size:11px; color:var(--ink-faint); display:block; }
+  .resp-check input{ width:18px; height:18px; accent-color:var(--pet-600); cursor:pointer; margin-top:1px; flex-shrink:0; }
+  .resp-check .resp-desc{ font-size:var(--t-12); color:var(--text-3); display:block; margin-top:2px; }
 
   .rut-upload{
-    border:1.5px dashed var(--line); border-radius:8px; padding:16px;
-    display:flex; align-items:center; gap:12px; font-size:13px; color:var(--ink-soft);
+    border:1.5px dashed var(--line); border-radius:var(--r-sm); padding:16px;
+    display:flex; align-items:center; gap:12px; font-size:var(--t-13); color:var(--ink-soft);
   }
-  .rut-upload input[type="file"]{ font-family:inherit; font-size:12.5px; }
-  .rut-filename{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--moss-deep); }
+  .rut-upload input[type="file"]{ font-family:inherit; font-size:var(--t-13); }
+  .rut-filename{ font-family:var(--font-num); font-size:var(--t-13); color:var(--ok); overflow-wrap:anywhere; }
 
   #addForm .btn{ height:46px; margin-top:22px; width:100%; }
-  #formError{ margin-top:14px; font-size:13px; color:#B0402D; display:none; }
+  #formError{ margin-top:14px; font-size:var(--t-13); color:var(--err); display:none; }
   #formError.show{ display:block; }
 
   #clientList{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
     overflow:hidden;
-    box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    box-shadow:var(--sh-2);
   }
   .client-row{
-    padding:20px 26px; border-bottom:1px solid var(--line);
-    opacity:0; animation:fadeUp .4s var(--ease) forwards;
+    padding:var(--s-4) var(--s-5); border-bottom:1px solid var(--border);
+    opacity:0; animation:fadeUp var(--dur-3) var(--ease) forwards;
+    transition:background-color var(--dur-1) var(--ease);
   }
+  .client-row:hover{ background:var(--n-25); }
   .client-row:last-child{ border-bottom:none; }
-  .client-row-top{ display:flex; align-items:center; justify-content:space-between; gap:16px; }
-  .client-row .info .name{ font-size:15px; font-weight:700; }
+  .client-row-top{ display:flex; align-items:center; justify-content:space-between; gap:var(--s-4); flex-wrap:wrap; }
+  .client-row .info{ min-width:0; flex:1 1 240px; }
+  .client-row .info .name{ font-size:var(--t-16); font-weight:600; overflow-wrap:anywhere; }
   .client-row .info .nit{
-    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-faint); margin-top:4px;
+    font-family:var(--font-num); font-size:var(--t-13); color:var(--text-3); margin-top:2px;
   }
   .client-row .stats{
-    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
-    margin-right:20px; text-align:right; white-space:nowrap;
+    font-family:var(--font-ui); font-size:var(--t-13); font-weight:600; color:var(--text-2);
+    margin-right:var(--s-3); text-align:right; white-space:nowrap;
   }
   .client-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
   .client-chip{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;
-    padding:4px 9px; border-radius:100px; background:#EAF3F7; color:var(--ink-soft);
+    font-family:var(--font-ui); font-size:var(--t-12); font-weight:600;
+    padding:2px 10px; border-radius:var(--r-pill); background:var(--surface-sunken); color:var(--text-2);
   }
-  .client-chip.retenedor{ background:var(--petroleo-soft); color:var(--petroleo-deep); }
+  .client-chip.retenedor{ background:var(--pet-100); color:var(--pet-600); }
   .row-actions{ display:flex; gap:2px; flex-shrink:0; align-items:center; }
   .del-btn{
-    background:none; border:none; color:var(--ink-faint);
-    font-family:'JetBrains Mono',monospace; font-size:11.5px;
-    cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
+    background:none; border:1px solid transparent; color:var(--text-2);
+    font-family:var(--font-ui); font-size:var(--t-13); font-weight:600;
+    cursor:pointer; min-height:36px; padding:var(--s-1) var(--s-3); border-radius:var(--r-sm);
+    transition:color var(--dur-1) var(--ease), background-color var(--dur-1) var(--ease); flex-shrink:0;
   }
-  .del-btn:hover{ color:#B0402D; }
-  .del-btn.edit-btn:hover{ color:var(--moss-deep); }
-  .del-btn.ficha-btn{ color:var(--petroleo-deep); }
-  .del-btn.ficha-btn:hover{ color:var(--petroleo); }
+  .del-btn:hover{ color:var(--err); background:var(--err-bg); }
+  .del-btn.edit-btn:hover{ color:var(--pet-600); background:var(--pet-100); }
+  .del-btn.ficha-btn{ color:var(--pet-600); text-decoration:none; }
+  .del-btn.ficha-btn:hover{ color:var(--pet-800); background:var(--pet-100); }
 
   #clientEmpty{
-    text-align:center; padding:50px 20px; color:var(--ink-faint);
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; letter-spacing:.5px;
-    border:1px dashed var(--line); border-radius:12px; background:var(--paper-raised); display:none;
+    text-align:center; padding:var(--s-10) var(--s-5); color:var(--text-2);
+    font-family:var(--font-ui); font-size:var(--t-14);
+    border:1px dashed var(--border-strong); border-radius:var(--r-md); background:var(--paper-raised); display:none;
   }
   #clientEmpty.show{ display:block; }
 
   #addClientBtnWrap{ display:none; justify-content:center; margin-top:22px; }
-  #addClientBtnWrap .btn{ padding:15px 30px; font-size:14px; }
+  #addClientBtnWrap .btn{ min-height:48px; padding:var(--s-3) var(--s-6); font-size:var(--t-16); }
 
   #loading{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
-    display:flex; align-items:center; gap:10px; padding:20px 0;
+    font-family:var(--font-ui); font-size:var(--t-14); color:var(--text-2);
+    display:flex; align-items:center; gap:var(--s-3); padding:var(--s-5) 0;
   }
-  .dot{width:7px;height:7px;background:var(--moss);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--pet-200);border-top-color:var(--pet-600);animation:spin .7s linear infinite;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 </style>
 </head>
@@ -175,29 +183,29 @@
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <h2 id="formTitle">Agregar cliente</h2>
       <div style="display:flex; align-items:center; gap:10px;">
-        <button type="button" class="btn ghost" id="btnCancelarEdicion" style="display:none; padding:8px 14px; font-size:12.5px;">← Volver al listado</button>
-        <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#EAF3F7; padding:6px 12px; border-radius:100px;"></span>
+        <button type="button" class="btn ghost" id="btnCancelarEdicion" style="display:none; padding:8px 14px; font-size:var(--t-13);">← Volver al listado</button>
+        <span id="planBadge" style="font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-soft); background:var(--n-100); padding:6px 12px; border-radius:var(--r-pill);"></span>
       </div>
     </div>
 
     <div class="form-section">
       <div class="form-section-title">RUT (documento) — opcional</div>
-      <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;">Si lo subes, la IA puede leerlo y completarte varios campos de abajo sola (nombre, NIT, dirección, actividad económica, responsabilidades...). Es opcional — también puedes llenar todo a mano, sin subir nada aquí.</div>
+      <div style="font-size:var(--t-13); color:var(--ink-soft); margin-bottom:14px;">Si lo subes, la IA puede leerlo y completarte varios campos de abajo sola (nombre, NIT, dirección, actividad económica, responsabilidades...). Es opcional — también puedes llenar todo a mano, sin subir nada aquí.</div>
       <div class="rut-upload">
         <input type="file" id="inputRutArchivo" accept="application/pdf,image/*">
         <span class="rut-filename" id="rutFilename"></span>
       </div>
-      <button type="button" class="btn ghost" id="btnLeerRut" style="display:none; margin-top:12px; padding:9px 16px; font-size:12.5px;">✨ Leer datos del RUT con IA</button>
+      <button type="button" class="btn ghost" id="btnLeerRut" style="display:none; margin-top:12px; padding:9px 16px; font-size:var(--t-13);">✨ Leer datos del RUT con IA</button>
 
       <div id="rutProgressWrap" style="display:none; margin-top:14px;">
-        <div id="rutProgressText" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;"></div>
-        <div style="height:6px; background:var(--line); border-radius:100px; overflow:hidden;">
-          <div id="rutProgressBar" style="height:100%; width:0%; background:var(--petroleo); border-radius:100px; transition:width .35s ease;"></div>
+        <div id="rutProgressText" style="font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-soft); margin-bottom:6px;"></div>
+        <div style="height:6px; background:var(--line); border-radius:var(--r-pill); overflow:hidden;">
+          <div id="rutProgressBar" style="height:100%; width:0%; background:var(--petroleo); border-radius:var(--r-pill); transition:width .35s ease;"></div>
         </div>
       </div>
 
-      <div id="rutIaStatus" style="font-size:12.5px; margin-top:10px; display:none;"></div>
-      <div style="font-size:11.5px; color:var(--ink-faint); margin-top:8px;">Según la calidad del documento, a veces la IA no encuentra todos los campos — revisa siempre antes de guardar.</div>
+      <div id="rutIaStatus" style="font-size:var(--t-13); margin-top:10px; display:none;"></div>
+      <div style="font-size:var(--t-12); color:var(--ink-faint); margin-top:8px;">Según la calidad del documento, a veces la IA no encuentra todos los campos — revisa siempre antes de guardar.</div>
     </div>
 
     <div class="form-section">
@@ -284,7 +292,7 @@
       </div>
 
       <div style="margin-top:18px;">
-        <label style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); display:block; margin-bottom:10px;">
+        <label style="font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3); display:block; margin-bottom:var(--s-3);">
           Responsabilidades tributarias (según el RUT, casilla 53)
         </label>
         <div class="resp-grid">
@@ -316,7 +324,7 @@
       </div>
 
       <div style="margin-top:18px;">
-        <label style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); display:block; margin-bottom:10px;">
+        <label style="font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3); display:block; margin-bottom:var(--s-3);">
           ICA (Industria y Comercio)
         </label>
         <div class="resp-grid">
@@ -328,7 +336,7 @@
       </div>
 
       <div style="margin-top:18px;">
-        <label style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); display:block; margin-bottom:10px;">
+        <label style="font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3); display:block; margin-bottom:var(--s-3);">
           Rete IVA
         </label>
         <div class="resp-grid">
