@@ -524,12 +524,17 @@ function renderFormularioEdicionFactura(inv){
     </div>`;
 
   return `<div class="edicion-factura" style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">
-    <div style="font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-faint); margin-bottom:10px;">El proveedor y el NIT identifican quién emitió el documento -- no se editan acá. Si están mal leídos, borra la factura y vuélvela a escanear/digitar.</div>
+    <div style="font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-faint); margin-bottom:10px;">El proveedor y el NIT identifican quién emitió el documento -- no se editan acá. Si quedaron mal leídos o mal digitados, corrígelos en Facturas con el botón "Corregir NIT" (en el detalle de la factura).</div>
     <div style="display:grid; grid-template-columns:repeat(2, minmax(140px,1fr)); gap:10px;">
       ${campoSoloLectura('Proveedor', inv.nombre_razon_social)}
       ${campoSoloLectura('NIT / Cédula', inv.nit_cc)}
       ${campoTexto('editFecha', 'Fecha (AAAA-MM-DD)', inv.fecha_factura)}
-      ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : ''}
+      ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : `
+        <div class="field">
+          <label class="ef-label">Subtotal (suma de los ítems)</label>
+          <div id="efSubtotalCalculado" class="input input--num-font" style="background:var(--surface-sunken); color:var(--text-2); display:flex; align-items:center;">$${itemsFuente.reduce((suma, it) => suma + (Number(it.subtotal) || 0), 0).toLocaleString('es-CO')}</div>
+          <span style="font-size:var(--t-12); color:var(--text-3);">Para cambiar el valor base, edita el subtotal de cada ítem abajo.</span>
+        </div>`}
       ${campoNumero('editIva', 'IVA', inv.valor_iva)}
       ${!tieneItems ? `<div class="field"><label class="ef-label">Categoría</label><select class="select" id="editCategoria" >${opcionesCategoria(inv.categoria_concepto)}</select></div>` : ''}
       ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label>${campoSubcuentaHtml(inv.categoria_concepto, inv.subcuenta_gasto, 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-13);"')}</div>` : ''}
@@ -541,7 +546,7 @@ function renderFormularioEdicionFactura(inv){
     </div>
     ${tieneItems ? `
       <div style="margin-top:16px;">
-        <div class="ef-label" style="margin-bottom:8px;">Ítems de la factura (el subtotal de arriba se recalcula solo a partir de estos)</div>
+        <div class="ef-label" style="margin-bottom:8px;">Ítems de la factura -- el valor base (subtotal) de la factura es la suma de estos</div>
         <div id="efItemsLista">${filasItems}</div>
         <button type="button" class="btn ghost btn--sm" id="btnAgregarItem" style="margin-top:4px;">+ Agregar ítem</button>
       </div>
@@ -757,6 +762,16 @@ function renderDetalle(){
   });
   const efItemsLista = document.getElementById('efItemsLista');
   if (efItemsLista) {
+    // El subtotal de la factura se ve actualizarse mientras se editan
+    // los ítems (reporte de la revisora: "no me dejó cambiar el valor
+    // base" -- se cambia desde aquí, y ahora se ve el resultado).
+    efItemsLista.addEventListener('input', (e) => {
+      if (!e.target.classList.contains('ef-item-subtotal')) return;
+      const totalEl = document.getElementById('efSubtotalCalculado');
+      if (!totalEl) return;
+      const suma = [...efItemsLista.querySelectorAll('.ef-item-subtotal')].reduce((t, el) => t + (Number(el.value) || 0), 0);
+      totalEl.textContent = '$' + suma.toLocaleString('es-CO');
+    });
     efItemsLista.addEventListener('change', (e) => {
       if (e.target.classList.contains('ef-item-categoria')) {
         const row = e.target.closest('.ef-item-row');
