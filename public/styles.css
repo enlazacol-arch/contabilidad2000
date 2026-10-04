@@ -151,12 +151,12 @@ h2,h3,h4{ font-family:var(--font-display); color:var(--text); letter-spacing:-0.
 code, kbd{ font-family:var(--font-num); }
 
 /* Cifras: cualquier monto, NIT o código. Alinea a la derecha en tablas. */
-.num, .money, .monto{
+.cifra{
   font-family:var(--font-num);
   font-variant-numeric:tabular-nums;
   white-space:nowrap;
 }
-td.num, th.num, .num.right{ text-align:right; }
+td.cifra, th.cifra, .cifra--der{ text-align:right; }
 .pos, .is-ingreso{ color:var(--ingreso); }
 .neg, .is-egreso{ color:var(--egreso); }
 .total-row td, tfoot td{ font-weight:700; }
@@ -352,7 +352,7 @@ h1{ animation:fadeUp var(--dur-3) var(--ease); }
 /* Barra de título reutilizable para secciones dentro de una página */
 .section-head{ display:flex; align-items:center; justify-content:space-between; gap:var(--s-3); flex-wrap:wrap; margin-bottom:var(--s-4); }
 .section-head h2{ margin:0; }
-.eyebrow{ font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); }
+.sobretitulo{ font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); }
 
 /* ---------- nav de pestañas (legado) ---------- */
 nav.tabs{
@@ -455,10 +455,10 @@ button{font-family:inherit;cursor:pointer;border:none;}
   font-size:var(--t-14);
   color:var(--text);
 }
-.field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
-.field > label, .label-field{ font-size:var(--t-13); font-weight:600; color:var(--text-2); }
-.field .hint{ font-size:var(--t-12); color:var(--text-3); }
-.field.has-error .hint, .field .error{ font-size:var(--t-12); color:var(--err); }
+.ui-field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.ui-field > label, .label-field{ font-size:var(--t-13); font-weight:600; color:var(--text-2); }
+.ui-field .hint{ font-size:var(--t-12); color:var(--text-3); }
+.ui-field.has-error .hint, .ui-field .error{ font-size:var(--t-12); color:var(--err); }
 .input, .select, .textarea{
   width:100%; min-height:40px;
   padding:var(--s-2) var(--s-3);
@@ -472,8 +472,8 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .textarea{ min-height:88px; resize:vertical; }
 .input:hover, .select:hover, .textarea:hover{ border-color:var(--n-400); }
 .input:focus, .select:focus, .textarea:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
-.input.num, .input--num{ text-align:right; font-family:var(--font-num); }
-.field.has-error .input, .input[aria-invalid="true"]{ border-color:var(--err); }
+.input--num{ text-align:right; font-family:var(--font-num); }
+.ui-field.has-error .input, .input[aria-invalid="true"]{ border-color:var(--err); }
 .input:disabled, .select:disabled{ background:var(--surface-sunken); color:var(--text-3); cursor:not-allowed; }
 .select{
   appearance:none; -webkit-appearance:none; padding-right:36px;
@@ -555,14 +555,14 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .badge--sello{ background:var(--stamp-soft); color:var(--stamp); }
 
 /* ---------- tarjetas ---------- */
-.card{
+.tarjeta{
   background:var(--surface);
   border:1px solid var(--border);
   border-radius:var(--r-md);
   padding:var(--s-5);
   min-width:0;
 }
-.card--raised{ box-shadow:var(--sh-2); }
+.tarjeta--elevada{ box-shadow:var(--sh-2); }
 
 /* ---------- indicadores (KPI) ---------- */
 .kpi-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap:var(--s-4); }
