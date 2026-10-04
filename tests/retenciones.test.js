@@ -510,3 +510,22 @@ test('subcuenta sugerida por el texto del ítem (facturas reales del conjunto)',
   assert.equal(RA.subcuentaPorTexto('compras', 'Resma papel carta'), '519530');
   assert.equal(RA.subcuentaPorTexto('compras', 'Multifuncional L32'), ''); // sin pista: lista general
 });
+
+// ---------- Bases según la fecha: suspensión del Decreto 572 ----------
+test('bases mínimas cambian con la fecha (Decreto 572 y su suspensión mayo-junio 2026)', () => {
+  const compras = RA.TARIFAS_RETENCION.compras, servicios = RA.TARIFAS_RETENCION.servicios;
+  assert.equal(RA.umbralPesos(compras, '06/07/2026'), 10 * 52374);  // 572 vigente
+  assert.equal(RA.umbralPesos(compras, '23/06/2026'), 27 * 52374);  // suspendido
+  assert.equal(RA.umbralPesos(compras, '07/05/2026'), 10 * 52374);  // día antes de la suspensión
+  assert.equal(RA.umbralPesos(compras, '01/07/2026'), 10 * 52374);  // vuelve el 572
+  assert.equal(RA.umbralPesos(servicios, '15/06/2026'), 4 * 52374);
+  assert.equal(RA.umbralPesos(servicios, '15/05/2025'), 4 * 49799); // antes del 572
+  assert.equal(RA.umbralPesos(RA.TARIFAS_RETENCION.honorarios_juridica, '15/06/2026'), 0);
+});
+
+test('compra en la suspensión del 572: Éxito $740.588 del 23/06/2026 no lleva retención', () => {
+  const inv = { categoria_concepto: 'compras', valor_sin_iva: 740588, valor_iva: 140712, nit_cc: '890900608', fecha_factura: '23/06/2026' };
+  assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null), null);
+  inv.fecha_factura = '23/07/2026'; // misma compra en julio: sí (2,5%)
+  assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null).bajo, 18515);
+});
