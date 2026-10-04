@@ -17,6 +17,8 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 // Motor contable mínimo (PUC + asientos de partida doble) -- ver
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
+// Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
+const { clasificarMovimiento } = require('./public/movimiento');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -3712,18 +3714,17 @@ async function procesarPaqueteDocumento(userId, base64, effectiveMediaType, forz
   return { documentos };
 }
 
-// Versión de servidor de la misma detección que ya hacía el navegador
-// en Escanear/Carga masiva -- comparar el NIT de la factura contra los
-// clientes del contador para decidir solo si es ingreso o egreso. Vive
-// aquí también porque el procesamiento en segundo plano no tiene un
-// navegador que lo haga por él.
-async function detectarClienteYMovimientoServidor(contadorId, data) {
-  const { rows: clientes } = await pool.query('SELECT id, nit, nombre FROM clients WHERE contador_id = $1', [contadorId]);
-  const asComprador = clientes.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
-  const asVendedor = clientes.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
-  if (asComprador) return { clienteId: asComprador.id, tipoMovimiento: 'egreso', confiado: true };
-  if (asVendedor) return { clienteId: asVendedor.id, tipoMovimiento: 'ingreso', confiado: true };
-  return { clienteId: '', tipoMovimiento: 'egreso', confiado: false };
+// Decide cliente e ingreso/egreso de una factura leída en segundo plano
+// (Carga masiva), con la MISMA regla que usan Escanear y Carga masiva en
+// el navegador -- ver public/movimiento.js. Si el lote se subió desde la
+// ficha de un cliente (`clienteFijoId`), solo se decide para ese cliente;
+// antes ese dato se guardaba en el lote pero no se usaba, y una factura
+// podía quedar asignada a otro cliente de la firma.
+async function detectarClienteYMovimientoServidor(contadorId, data, clienteFijoId) {
+  const { rows: clientes } = await pool.query('SELECT id, nit, dv, nombre FROM clients WHERE contador_id = $1', [contadorId]);
+  const clienteFijo = clienteFijoId ? clientes.find((c) => c.id === clienteFijoId) || null : null;
+  const r = clasificarMovimiento(data, clientes, { clienteFijo });
+  return { clienteId: r.clienteId, tipoMovimiento: r.tipoMovimiento, confiado: r.confiado, motivo: r.motivo, otroClienteId: r.otroClienteId };
 }
 
 app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {

@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="/retenciones.js"></script>
+<script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
   /* En pantallas grandes el lote antes se quedaba angosto (una sola
@@ -2146,10 +2147,9 @@ summaryBody.addEventListener('change', (e) => {
     const clienteId = e.target.value;
     if (!clienteId) return;
     const cliente = myClients.find(c => c.id === clienteId);
-    const esComprador = cliente.nit && item.data.adquiriente_nit && cliente.nit === item.data.adquiriente_nit;
-    const esVendedor = cliente.nit && item.data.nit_cc && cliente.nit === item.data.nit_cc;
+    // Misma regla única que Escanear y el servidor (public/movimiento.js)
     item.clienteId = clienteId;
-    item.tipoMovimiento = esComprador ? 'egreso' : (esVendedor ? 'ingreso' : 'egreso');
+    item.tipoMovimiento = clasificarMovimiento(item.data, myClients, { clienteFijo: cliente }).tipoMovimiento;
     item.estado = 'listo'; // el contador ya lo confirmó a mano
     cargarPucClienteYRefrescar(clienteId);
     renderSummary();
@@ -2160,6 +2160,9 @@ summaryBody.addEventListener('change', (e) => {
   if (e.target.dataset.role === 'tipo-manual') {
     if (!e.target.value) return;
     item.tipoMovimiento = e.target.value;
+    // El cliente ya es el de la ficha -- se asegura aquí también, para
+    // que la factura nunca se guarde sin cliente.
+    if (!item.clienteId && clientePreseleccionado) item.clienteId = clientePreseleccionado.id;
     item.estado = 'listo';
     renderSummary();
   }

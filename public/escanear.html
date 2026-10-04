@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <script src="/retenciones.js"></script>
+<script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
   /* Estilos propios de esta página (el resto vive en styles.css) */
@@ -1066,8 +1067,10 @@ function renderMovFallback(data){
     if (!clienteId) { warnEl.classList.remove('show'); return; }
 
     const cliente = myClients.find(c => c.id === clienteId);
-    const esComprador = cliente.nit && data.adquiriente_nit && cliente.nit === data.adquiriente_nit;
-    const esVendedor = cliente.nit && data.nit_cc && cliente.nit === data.nit_cc;
+    // Regla única de ingreso/egreso (public/movimiento.js)
+    const clasif = clasificarMovimiento(data, myClients, { clienteFijo: cliente });
+    const esComprador = clasif.motivo === 'adquiriente';
+    const esVendedor = clasif.motivo === 'emisor';
     // El contador acaba de elegir el cliente a mano -- ya se sabe cuál
     // es sin importar si algún NIT le calza, así que el selector de
     // subcuenta ya puede ofrecer su PUC personalizado si tiene.
@@ -1131,8 +1134,9 @@ function detectClient(data){
   // movimiento (ingreso/egreso) contra ESE cliente en particular.
   if (clientePreseleccionado) {
     const c = clientePreseleccionado;
-    const esComprador = c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit;
-    const esVendedor = c.nit && data.nit_cc && c.nit === data.nit_cc;
+    const clasif = clasificarMovimiento(data, myClients, { clienteFijo: c });
+    const esComprador = clasif.motivo === 'adquiriente';
+    const esVendedor = clasif.motivo === 'emisor';
     if (esComprador) {
       currentClienteId = c.id;
       currentTipoMovimiento = 'egreso';
@@ -1151,10 +1155,12 @@ function detectClient(data){
     return;
   }
 
-  // Egreso: el cliente aparece como ADQUIRIENTE (compró la factura)
-  const asComprador = myClients.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
-  // Ingreso: el cliente aparece como EMISOR (vendió la factura)
-  const asVendedor = myClients.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
+  // Regla única (public/movimiento.js): egreso si el cliente es el
+  // ADQUIRIENTE (compró), ingreso si es el EMISOR (vendió). Compara los
+  // NIT normalizados -- antes "900.123.456-7" no coincidía con "900123456".
+  const clasif = clasificarMovimiento(data, myClients);
+  const asComprador = clasif.motivo === 'adquiriente' ? clasif.cliente : null;
+  const asVendedor = clasif.motivo === 'emisor' ? clasif.cliente : null;
 
   if (asComprador) {
     currentClienteId = asComprador.id;
