@@ -6,7 +6,7 @@
 <title>Enlaza — Balance General</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <script>
   // Chart.js se intenta cargar desde cdnjs primero; si ese CDN en
@@ -29,89 +29,43 @@
     .catch((err) => { console.warn('No se pudo cargar Chart.js desde ningún CDN:', err.message); return false; });
 </script>
 <script src="/estadisticas.js"></script>
+<script src="/graficas-tema.js"></script>
 <style>
   .wrap{ max-width:1240px; }
-
-  .stat-cards{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:24px; }
   @media (max-width:760px){ .stat-cards{ grid-template-columns:1fr; } }
-  .stat-card{ background:var(--paper-raised); border:1px solid var(--line); border-top:3px solid var(--line); border-radius:12px; padding:20px 22px; box-shadow:var(--shadow-sm); }
-  .stat-card .label{ font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); }
-  .stat-card .value{ font-family:'Archivo',sans-serif; font-weight:800; font-size:28px; color:var(--ink); margin-top:8px; }
-  .stat-card.ingresos{ border-top-color:var(--moss); }
-  .stat-card.ingresos .value{ color:var(--moss-deep); }
-  .stat-card.egresos{ border-top-color:var(--ember); }
-  .stat-card.egresos .value{ color:var(--ember-deep); }
-  .stat-card.balance{ border-top-color:var(--clay); }
-  .stat-card.balance .value.positivo{ color:var(--moss-deep); }
-  .stat-card.balance .value.negativo{ color:var(--ember-deep); }
-
-  .chart-card{
-    background:#FFFFFF; border-radius:12px; padding:22px 24px; margin-bottom:20px;
-    box-shadow:var(--shadow-md); border:1px solid var(--line);
-  }
-  .chart-card h2{ font-family:'Archivo',sans-serif; font-size:15px; margin:0 0 16px; color:#1D2A32; }
-  .chart-wrap{ position:relative; height:300px; }
 
   #tablaMensual{ width:100%; border-collapse:collapse; }
   #tablaMensual th{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:#8AA0AC; text-align:right; padding:10px 14px; border-bottom:1px solid #DCE7EC;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.05em;
+    color:var(--n-500); text-align:right; padding:10px 14px; border-bottom:1px solid var(--n-200);
   }
   #tablaMensual th:first-child{ text-align:left; }
   #tablaMensual td{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; text-align:right; padding:10px 14px;
-    border-bottom:1px solid #DCE7EC; color:#1D2A32;
+    font-family:var(--font-num); font-size:var(--t-13); text-align:right; padding:10px 14px;
+    border-bottom:1px solid var(--n-200); color:var(--n-900);
   }
-  #tablaMensual td:first-child{ text-align:left; font-family:'Inter',sans-serif; }
-  #tablaMensual .balance-pos{ color:#3E6053; font-weight:600; }
-  #tablaMensual .balance-neg{ color:#8B5245; font-weight:600; }
+  #tablaMensual td:first-child{ text-align:left; font-family:var(--font-ui); }
+  #tablaMensual .balance-pos{ color:var(--ingreso); font-weight:600; }
+  #tablaMensual .balance-neg{ color:var(--stamp); font-weight:600; }
 
   #loading{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+    font-family:var(--font-num); font-size:var(--t-13); color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:30px 0;
   }
-  .dot{width:7px;height:7px;background:var(--moss);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--pet-200);border-top-color:var(--pet-600);animation:spin .7s linear infinite;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
   .filtro-cliente{ display:flex; align-items:center; gap:10px; margin-bottom:20px; flex-wrap:wrap; }
   .filtro-cliente label{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase;
     letter-spacing:.05em; color:var(--ink-faint);
   }
   #clientSelect{
-    font-family:'JetBrains Mono',monospace;
-    font-size:12.5px; letter-spacing:.5px; text-transform:uppercase;
-    padding:9px 14px; border:1px solid #DCE7EC; background:#FFFFFF;
-    color:#1D2A32; border-radius:6px; cursor:pointer;
+    font-family:var(--font-num);
+    font-size:var(--t-13); letter-spacing:0; text-transform:uppercase;
+    padding:9px 14px; border:1px solid var(--n-200); background:#FFFFFF;
+    color:var(--n-900); border-radius:var(--r-sm); cursor:pointer;
   }
-
-  .client-tabbar{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    padding:14px 18px 16px; margin-bottom:20px; box-shadow:var(--shadow-sm);
-  }
-  .client-tabbar .ctb-head{
-    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
-  }
-  .client-tabbar .ctb-cliente-label{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:var(--ink-faint);
-  }
-  .client-tabbar .ctb-cliente-nombre{
-    font-family:'Archivo',sans-serif; font-weight:800; font-size:15px; color:var(--ink); margin-right:auto;
-  }
-  .client-tabbar .ctb-exit{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
-  }
-  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
-  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
-  .client-tabbar .ctb-links a{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
-    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:100px;
-    transition:all .15s ease; white-space:nowrap;
-  }
-  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
-  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
-  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -372,24 +326,27 @@ async function renderizar(){
   await window.chartJsListo; // espera a que termine de intentar cargar Chart.js (cdnjs y, si falla, jsDelivr) antes de usarlo
   try {
     chartComparativo = new Chart(document.getElementById('chartComparativo'), {
-      type: 'line',
+      type: 'bar',
       data: {
         labels: ingresosPorMes.map(m => etiquetaMes(m.mes)),
         datasets: [
-          { label: 'Ingresos', data: ingresosPorMes.map(m => m.total), borderColor: '#5B8072', backgroundColor: 'rgba(91,128,114,0.12)', fill: true, tension: 0.3, pointRadius: 3 },
-          { label: 'Egresos', data: egresosPorMes.map(m => m.total), borderColor: '#FF5A36', backgroundColor: 'rgba(255,90,54,0.1)', fill: true, tension: 0.3, pointRadius: 3 },
+          { label: 'Ingresos', data: ingresosPorMes.map(m => m.total), backgroundColor: '#5B8072', maxBarThickness: 18, categoryPercentage: 0.7, barPercentage: 0.9 },
+          { label: 'Egresos', data: egresosPorMes.map(m => m.total), backgroundColor: '#FF5A36', maxBarThickness: 18, categoryPercentage: 0.7, barPercentage: 0.9 },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'top', labels: { font: { family: 'Inter' } } } },
-        scales: { y: { ticks: { callback: (v) => '$' + (v/1000).toLocaleString('es-CO') + 'k' } } },
+        plugins: { legend: { position: 'top' } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { callback: (v) => window.enlazaGraficas ? window.enlazaGraficas.eje(v) : v } },
+        },
       },
     });
   } catch (err) {
     console.error('No se pudo dibujar la gráfica:', err.message);
     document.querySelectorAll('.chart-wrap').forEach((el) => {
-      el.innerHTML = '<div class="empty-note" style="font-family:JetBrains Mono, monospace; font-size:12.5px; color:#8AA0AC; padding:40px 0; text-align:center;">No se pudo cargar la librería de gráficas (revisa tu conexión). La tabla de abajo sigue siendo correcta.</div>';
+      el.innerHTML = '<div class="empty-note">No se pudo cargar la librería de gráficas (revisa tu conexión). La tabla de abajo sigue siendo correcta.</div>';
     });
   }
 }
