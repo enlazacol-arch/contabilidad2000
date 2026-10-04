@@ -77,12 +77,33 @@ function valoresDescuadrados(inv) {
 // Cada definición: `tipo` (id estable, útil para CSS/filtros), `etiqueta`
 // (texto corto para la insignia), `detecta(inv)` (boolean) y
 // `detalle(inv)` (la explicación completa, para el panel/tooltip).
+// Fórmula del dígito de verificación de la DIAN: vive en movimiento.js
+// (en el navegador como función global, en el servidor con require).
+function dvNoCoincide(inv) {
+  const calcular = (typeof calcularDvNit === 'function') ? calcularDvNit
+    : (typeof require === 'function' ? require('./movimiento').calcularDvNit : null);
+  if (!calcular) return false;
+  const nit = soloDigitosParaExcepciones(inv.nit_cc);
+  const dv = String(inv.dv == null ? '' : inv.dv).trim();
+  if (!nit || !/^\d$/.test(dv)) return false;
+  const esperado = calcular(nit);
+  return !!esperado && esperado !== dv;
+}
+
 const DEFINICIONES_EXCEPCIONES = [
   {
     tipo: 'sin_nit',
     etiqueta: 'Sin NIT',
     detecta: (inv) => !soloDigitosParaExcepciones(inv.nit_cc),
     detalle: () => 'El emisor quedó sin un NIT/cédula numérico -- verifica que el documento realmente no lo traiga antes de reportarlo así.',
+  },
+  {
+    tipo: 'nit_por_verificar',
+    etiqueta: 'NIT por verificar',
+    detecta: (inv) => !!inv.aviso_nit || dvNoCoincide(inv),
+    detalle: (inv) => inv.aviso_nit
+      ? `${inv.aviso_nit} Compáralo con el documento antes de guardar.`
+      : `El dígito de verificación (${inv.dv}) no corresponde al NIT ${soloDigitosParaExcepciones(inv.nit_cc)} -- uno de los dos quedó mal leído o digitado.`,
   },
   {
     tipo: 'letras_no_coincide',

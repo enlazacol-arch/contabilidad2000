@@ -18,7 +18,7 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 // Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
-const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto } = require('./public/movimiento');
+const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -2082,6 +2082,27 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
 // facturas de egreso ya aprobadas -- Escanear y Carga masiva la usan
 // como subcuenta preseleccionada (ver subcuentaAprendida() en
 // public/retenciones.js). Clave: "NIT|categoria".
+// NITs que este año ya tienen alguna factura guardada en la que el
+// documento pedía aplicar la tabla del Art. 383 -- ver
+// registrarNitsArticulo383() en public/retenciones.js.
+app.get('/api/articulo-383-por-nit', requireAuth, async (req, res) => {
+  try {
+    const anio = String(new Date().getFullYear());
+    const { rows } = await pool.query(
+      `SELECT DISTINCT nit_cc, cliente_id FROM invoices
+        WHERE contador_id = $1 AND solicita_articulo_383 = true AND nit_cc <> '' AND RIGHT(fecha_factura, 4) = $2`,
+      [req.firmaId, anio]
+    );
+    const nits = [...new Set(rows
+      .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
+      .map((r) => normalizarNit(r.nit_cc)))];
+    res.json(nits);
+  } catch (err) {
+    console.error('Error leyendo NITs con Art. 383:', err);
+    res.status(500).json({ error: 'No se pudieron leer los NIT con Art. 383.' });
+  }
+});
+
 app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -2315,6 +2336,28 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     // se evalúa si ambos valores base están presentes -- una factura sin
     // valor_sin_iva o sin valor_con_iva ya se rechaza antes por otro
     // motivo (campo obligatorio vacío), no hace falta duplicarlo aquí.
+    // Misma factura escaneada otra vez (otra foto, otro archivo): mismo
+    // proveedor y mismo número. El control por huella del archivo de
+    // arriba no la detecta porque el archivo es distinto.
+    const numeroLimpio = String(req.body.numeros_fe || '').replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toUpperCase();
+    if (req.body.nit_cc && numeroLimpio && !req.body.forzar_duplicado) {
+      const { rows: mismoNumero } = await pool.query(
+        `SELECT ${CAMPOS_FACTURA_EXISTENTE} FROM invoices
+          WHERE contador_id = $1
+            AND REGEXP_REPLACE(nit_cc, '[^0-9]', '', 'g') = $2
+            AND LTRIM(UPPER(REGEXP_REPLACE(numeros_fe, '[^0-9A-Za-z]', '', 'g')), '0') = $3
+          LIMIT 1`,
+        [req.firmaId, normalizarNit(req.body.nit_cc), numeroLimpio]
+      );
+      if (mismoNumero.length > 0) {
+        return res.status(409).json({
+          error: `Ya existe una factura de este proveedor con el número ${req.body.letras_fe || ''}${req.body.numeros_fe} -- no se guardó de nuevo para evitar un duplicado.`,
+          duplicado: true,
+          factura_existente: mismoNumero[0],
+        });
+      }
+    }
+
     const sinIvaGuardado = Number(req.body.valor_sin_iva) || 0;
     const ivaGuardado = Number(req.body.valor_iva) || 0;
     const conIvaGuardado = Number(req.body.valor_con_iva) || 0;
@@ -3393,6 +3436,7 @@ CUALQUIER OTRO DOCUMENTO -- tipo_documento = "otro" (SIEMPRE rechazar, documento
 - Comprobantes o recibos de pago, soportes o confirmaciones de transferencia bancaria, extractos bancarios.
 - Cotizaciones, proformas, órdenes de compra o remisiones sin valor fiscal.
 - Contratos, recibos de consignación, tickets no fiscales, reportes o resúmenes de pagos.
+- Certificaciones, declaraciones juramentadas o anexos sin un valor a pagar (ej. la certificación de que el independiente no contrató 2 o más trabajadores, para el Art. 383), aunque vengan junto a una cuenta de cobro.
 - Capturas de pantalla de apps de pago, comprobantes de Nequi/Daviplata/PSE, o cualquier documento que no sea una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.
 
 Si tienes dudas genuinas entre estos tres tipos válidos, elige el que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los tres.`;
@@ -3614,6 +3658,17 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     }
   }
 
+  // Sin ningún valor a pagar no hay nada que causar: casi siempre es un
+  // anexo (ej. la certificación del Art. 383 que acompaña una cuenta de
+  // cobro), que antes se guardaba como una cuenta de cobro de $0.
+  if (!(Number(parsed.valor_con_iva) > 0) && !(Number(parsed.valor_sin_iva) > 0)) {
+    return {
+      ok: false,
+      tipoDocumento: 'sin_valor',
+      publicMessage: 'Este documento no muestra un valor a pagar: parece un anexo o una certificación (por ejemplo, la certificación del Art. 383 que acompaña una cuenta de cobro), no una factura. Si sí es una factura, la imagen no dejó leer el valor -- vuelve a tomar la foto.',
+    };
+  }
+
   // Ver normalizarMayusculasTexto() arriba -- solo nombre_razon_social y
   // concepto (los dos campos de texto libre que más se ven en pantalla),
   // nunca nit_cc ni ningún valor numérico.
@@ -3643,6 +3698,41 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     if (typeof parsed[campoNombre] === 'string') {
       parsed[campoNombre] = parsed[campoNombre].replace(/\s+/g, ' ').trim().toLocaleUpperCase('es-CO');
     }
+  }
+
+  // NIT por verificar (se muestra como excepción "NIT por verificar"):
+  // - el dígito de verificación leído no corresponde al NIT;
+  // - este mismo proveedor (por nombre) ya está guardado con OTRO NIT --
+  //   en la prueba con facturas reales, 1 de 4 facturas de GAMOEZ salió
+  //   con un dígito cambiado (900627469 en vez de 901627469).
+  const avisosNit = [];
+  if (parsed.nit_cc && parsed.dv !== undefined && parsed.dv !== null && String(parsed.dv).trim() !== '') {
+    const dvCalculado = calcularDvNit(parsed.nit_cc);
+    if (dvCalculado && dvCalculado !== String(parsed.dv).trim()) {
+      avisosNit.push(`El dígito de verificación leído (${parsed.dv}) no corresponde al NIT ${parsed.nit_cc} (debería ser ${dvCalculado}).`);
+    }
+  }
+  if (parsed.nit_cc && parsed.nombre_razon_social) {
+    try {
+      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const { rows } = await pool.query(
+        `SELECT nit_cc, COUNT(*) AS n FROM invoices
+          WHERE contador_id = $1 AND nit_cc <> ''
+            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
+          GROUP BY nit_cc ORDER BY n DESC LIMIT 3`,
+        [userId, nombreSinTildes]
+      );
+      const conocidos = [...new Set(rows.map((r) => normalizarNit(r.nit_cc)).filter(Boolean))];
+      if (conocidos.length > 0 && !conocidos.includes(parsed.nit_cc)) {
+        avisosNit.push(`${parsed.nombre_razon_social} ya está registrado con el NIT ${conocidos[0]}, y en este documento se leyó ${parsed.nit_cc}.`);
+      }
+    } catch (err) {
+      console.error('No se pudo comparar el NIT con proveedores conocidos:', err.message);
+    }
+  }
+  if (avisosNit.length > 0) {
+    parsed.aviso_nit = avisosNit.join(' ');
+    parsed.confianza_campos.nit_cc = Math.min(Number(parsed.confianza_campos.nit_cc ?? 1), 0.3);
   }
 
   // Total con IVA: algunas facturas muestran como total el neto que YA

@@ -131,8 +131,10 @@ test('calcularRetencionSugerida: null en categoría "otro" (sin tarifa confirmad
 
 // ---------- calcularRetencionSugerida: rango declarante/no declarante ----------
 
-test('calcularRetencionSugerida (servicios): sin saber si declara renta, devuelve el rango completo', () => {
-  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, nit_cc: '900111222', fecha_factura: '01/09/2026' };
+test('calcularRetencionSugerida (servicios): persona natural sin saber si declara renta, devuelve el rango completo', () => {
+  // Cédula (persona natural): no se sabe si declara. Un NIT de persona
+  // jurídica (9 dígitos, empieza por 8 o 9) siempre se trata como declarante.
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, nit_cc: '71261773', fecha_factura: '01/09/2026' };
   const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, null, {});
   assert.equal(r.bajo, Math.round(1000000 * 0.04));
   assert.equal(r.alto, Math.round(1000000 * 0.06));
@@ -452,4 +454,59 @@ test('PUC: compras ya no preselecciona Inventarios y no quedan códigos inexiste
   assert.equal(RA.SUBCUENTAS_GASTO.compras[0][0], '519595');
   const todos = Object.values(RA.SUBCUENTAS_GASTO).flat().map(([c]) => c);
   for (const inexistente of ['513528', '513560', '513565', '513570', '513545']) assert.equal(todos.includes(inexistente), false);
+});
+
+// ---------- Persona jurídica = declarante (tarifa exacta) ----------
+test('esNitPersonaJuridica: NIT de empresa sí, cédula no', () => {
+  assert.equal(RA.esNitPersonaJuridica('901627469'), true);   // GAMOEZ S.A.S.
+  assert.equal(RA.esNitPersonaJuridica('890.900.608-9'), true); // Almacenes Éxito
+  assert.equal(RA.esNitPersonaJuridica('71261773'), false);   // cédula 8 dígitos
+  assert.equal(RA.esNitPersonaJuridica('1017197367'), false); // cédula 10 dígitos
+});
+
+test('compras a persona jurídica: tarifa exacta de declarante (GAMOEZ)', () => {
+  const s = RA.calcularRetencionSugerida({ categoria_concepto: 'compras', valor_sin_iva: 619534, valor_iva: 117712, nit_cc: '901627469', fecha_factura: '06/07/2026' }, PH, {}, null);
+  assert.equal(s.mismaTarifa, true);
+  assert.equal(s.bajo, 15488); // 2,5% (antes rango 15.488 - 21.684)
+});
+
+test('Art. 383 por proveedor: si el NIT ya lo pidió este año, aplica aunque este documento no lo diga (IMB)', () => {
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 280000, nit_cc: '71261773', fecha_factura: '17/07/2026' };
+  assert.equal(!!RA.calcularRetencionSugerida(inv, PH, {}, null).aplicaArticulo383, false);
+  RA.registrarNitsArticulo383(['71261773']);
+  assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null).aplicaArticulo383, true);
+  RA.registrarNitsArticulo383([]);
+});
+
+test('servicios públicos: la subcuenta sale del servicio que dice el documento', () => {
+  const sub = (nombre, concepto) => RA.normalizarItemsDesdeIA({ categoria_concepto: 'servicios_publicos', nombre_razon_social: nombre, concepto, valor_sin_iva: 43706 })[0].subcuenta_gasto;
+  assert.equal(sub('COMCEL S.A.', 'Servicio de telefonía móvil'), '513535'); // Claro
+  assert.equal(sub('EMPRESAS PÚBLICAS DE MEDELLÍN', 'Energía eléctrica periodo junio'), '513530');
+  assert.equal(sub('AGUAS DE MANIZALES', 'Acueducto y alcantarillado'), '513525');
+  assert.equal(sub('VANTI S.A.', 'Consumo de gas natural'), '513555');
+});
+
+test('AIU: la línea "AIU" mal clasificada como servicios y AIU repetidos en las líneas (Coraza, segunda lectura)', () => {
+  // Misma factura VP18187, leída de otra forma por la IA: servicios sin
+  // AIU, AIU dentro de cada línea y la línea AIU como "servicios".
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 23981410, valor_iva: 455646, fecha_factura: '14/07/2026', nit_cc: '900434727',
+    items: [
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 24 HORAS', subtotal: 15434045, categoria_concepto: 'vigilancia_aseo', aiu: 1543405 },
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 08 HORAS NOCTURNAS', subtotal: 6147224, categoria_concepto: 'vigilancia_aseo', aiu: 614722 },
+      { descripcion: 'AIU 10 Art 46 Ley 1607 de 2012', subtotal: 2398141, categoria_concepto: 'servicios', aiu: '' },
+    ],
+  };
+  const s = sugerirConItems(data);
+  assert.equal(data.items[2].categoria_concepto, 'vigilancia_aseo');
+  assert.equal(s.bajo, 47963); // antes: 139.089
+});
+
+test('subcuenta sugerida por el texto del ítem (facturas reales del conjunto)', () => {
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Reparación shut de basuras con cambio de ducto'), '514510');
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Precarga de hidroflo y revisión de motobomba'), '514515');
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Procesamiento Facturas de Administración'), '513520');
+  assert.equal(RA.subcuentaPorTexto('compras', 'CLORO GRANULADO AL 70% X 1KG'), '519525');
+  assert.equal(RA.subcuentaPorTexto('compras', 'Resma papel carta'), '519530');
+  assert.equal(RA.subcuentaPorTexto('compras', 'Multifuncional L32'), ''); // sin pista: lista general
 });

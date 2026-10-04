@@ -918,6 +918,8 @@ async function loadSubcuentasAprendidas(){
   try {
     const res = await fetch('/api/subcuentas-aprendidas');
     if (res.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await res.json());
+    const res383 = await fetch('/api/articulo-383-por-nit');
+    if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
   } catch (e) {
     console.warn('No se pudieron cargar las subcuentas aprendidas:', e.message);
   }
@@ -1980,6 +1982,31 @@ function renderResult(data){
       };
       actualizarAvisoSinNit();
       input.addEventListener('input', actualizarAvisoSinNit);
+
+      // NIT por verificar (excepciones.js): DV que no corresponde, o un
+      // proveedor ya conocido con otro NIT (aviso_nit, lo pone el
+      // servidor al leer). El aviso del servidor deja de aplicar si el
+      // contador cambia el NIT leído.
+      const nitLeido = input.value;
+      const nitVerifEl = document.createElement('div');
+      nitVerifEl.className = 'digit-warn';
+      nitVerifEl.style.color = 'var(--warn)';
+      row.appendChild(nitVerifEl);
+      const actualizarAvisoVerificacion = () => {
+        const dvInput = ledger.querySelector('[data-key="dv"]');
+        const inv = {
+          nit_cc: input.value,
+          dv: dvInput ? dvInput.value : '',
+          aviso_nit: input.value === nitLeido && currentInvoiceData ? currentInvoiceData.aviso_nit : '',
+        };
+        const exc = (typeof listaExcepciones === 'function' ? listaExcepciones(inv) : []).find((x) => x.tipo === 'nit_por_verificar');
+        nitVerifEl.textContent = exc ? '⚠ ' + exc.detalle : '';
+        nitVerifEl.classList.toggle('show', !!exc);
+      };
+      ledger.addEventListener('input', (e) => {
+        if (e.target && (e.target.dataset.key === 'nit_cc' || e.target.dataset.key === 'dv')) actualizarAvisoVerificacion();
+      });
+      setTimeout(actualizarAvisoVerificacion, 0);
     }
 
     ledger.appendChild(row);
@@ -2097,12 +2124,15 @@ function renderResult(data){
       function preseleccionarSubcuentaAprendida(){
         if (typeof subcuentaAprendida !== 'function') return;
         const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
-        const aprendida = subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
+        const textoFactura = currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '';
+        const aprendida = (typeof subcuentaSugerida === 'function')
+          ? subcuentaSugerida(nitInput ? nitInput.value : '', input.value, textoFactura)
+          : subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
         if (!aprendida) return;
         if (![...subSelect.options].some((o) => o.value === aprendida)) {
           const opt = document.createElement('option');
           opt.value = aprendida;
-          opt.textContent = `${aprendida} — usada antes con este proveedor`;
+          opt.textContent = `${aprendida} — sugerida para este proveedor`;
           subSelect.insertBefore(opt, subSelect.firstChild);
         }
         subSelect.value = aprendida;

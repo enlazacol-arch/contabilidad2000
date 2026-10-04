@@ -372,6 +372,20 @@ const CATEGORIA_CONCEPTO_LABELS = {
 // agente_retencion_iva } -- o null/undefined si el contador nunca
 // marcó nada para ese NIT (en ese caso, se cae de vuelta a lo que la
 // IA leyó en el documento, como antes).
+// NITs que en el año ya pidieron el Art. 383 en algún documento guardado
+// (ver /api/articulo-383-por-nit). Si una cuenta de cobro de ese
+// proveedor lo pidió, las demás del mismo año también lo aplican, aunque
+// la IA no lo detecte en cada documento (pasó con 1 de 7 de IMB).
+let NITS_ARTICULO_383 = new Set();
+function registrarNitsArticulo383(lista) {
+  NITS_ARTICULO_383 = new Set((Array.isArray(lista) ? lista : []).map((n) => String(n).replace(/[^0-9]/g, '')));
+}
+
+function esNitPersonaJuridica(nit) {
+  const digitos = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
+  return /^[89]\d{8}$/.test(digitos);
+}
+
 function perfilFiscalEfectivo(inv, perfilTercero) {
   const regimenSimple = !!(perfilTercero && perfilTercero.regimen_simple) ||
     inv.regimen_simple === true || inv.regimen_simple === 'true';
@@ -387,7 +401,12 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // donde la tarifa depende de si el proveedor declara renta o no. Si
   // nadie lo marcó todavía, se sigue mostrando el rango como antes --
   // "no se sabe" nunca se trata como "no declara".
-  const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta);
+  // Una persona jurídica siempre declara renta: si el NIT tiene la forma
+  // de una persona jurídica (9 dígitos que empiezan por 8 o 9), se usa la
+  // tarifa de declarante aunque nadie lo haya marcado en la ficha. Las
+  // cédulas de personas naturales no tienen esa forma (hasta 8 dígitos,
+  // o 10 que empiezan por 1), así que para ellas sigue el rango.
+  const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta) || esNitPersonaJuridica(inv.nit_cc);
   // Art. 383: lo marca el contador en la ficha de Terceros fiscales (a
   // partir de la certificación del contratista), o lo detecta la IA
   // cuando el propio documento lo dice -- muchas cuentas de cobro de
@@ -396,7 +415,8 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // trabajadores (inv.solicita_articulo_383). Ver el comentario junto a
   // esta bandera en calcularRetencionCategoriaLinea() más abajo.
   const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
-    inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true';
+    inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true' ||
+    NITS_ARTICULO_383.has(String(inv.nit_cc || '').replace(/-\s*\d$/, '').replace(/[^0-9]/g, ''));
   return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
 }
 
@@ -805,6 +825,66 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   };
 }
 
+// ---------- Subcuenta de un servicio público según el documento ----------
+// Una factura de servicios públicos dice explícitamente qué servicio es
+// (energía, acueducto, teléfono/celular/internet, gas, aseo). Antes todas
+// caían en una sola cuenta ("513528", que no existe en el PUC); ahora se
+// toma la subcuenta real del texto del documento. Sin coincidencia, se
+// usa la primera de la lista y el contador la confirma.
+const SUBCUENTA_POR_SERVICIO = [
+  [/tel[eé]fono|telefon[ií]a|celular|m[oó]vil|internet|datos|comcel|claro|movistar|tigo|wom\b|\bune\b|etb/i, '513535'],
+  [/energ[ií]a|el[eé]ctric|\bluz\b|kwh|enel|codensa|celsia|electrohuila|essa\b|chec\b/i, '513530'],
+  [/acueducto|alcantarillado|\bagua\b|m3|m³/i, '513525'],
+  [/\bgas\b|vanti|gases de/i, '513555'],
+  [/\baseo\b|recolecci[oó]n|basuras|residuos/i, '513505'],
+];
+function subcuentaServicioPublico(texto) {
+  const t = String(texto || '');
+  const encontrada = SUBCUENTA_POR_SERVICIO.find(([patron]) => patron.test(t));
+  return encontrada ? encontrada[1] : '';
+}
+
+// ---------- Subcuenta sugerida por el texto del ítem ----------
+// Sin historial con un proveedor, la subcuenta preseleccionada era
+// siempre la primera de la lista (casi siempre "Otros"). Estas palabras,
+// tomadas de la descripción del ítem, proponen la subcuenta precisa
+// (probado con las facturas reales del Conjunto Bosques de la Macarena:
+// reparaciones, mantenimiento de bombas, productos de aseo...). Es solo
+// la preselección: el contador la confirma o la cambia, y desde ese
+// momento manda lo aprendido para ese proveedor.
+const SUBCUENTA_POR_TEXTO = {
+  servicios: [
+    [/procesamiento|software|licencia|facturaci[oó]n electr[oó]nica|hosting|nube|plataforma/i, '513520'],
+    [/transporte|flete|acarreo|mensajer[ií]a/i, '513550'],
+    [/(mantenimiento|reparaci[oó]n|arreglo|revisi[oó]n|precarga|instalaci[oó]n).*(bomba|motobomba|hidroflo|motor|equipo|planta|ascensor|m[aá]quina|tablero)|(bomba|motobomba|hidroflo|motor|ascensor|planta el[eé]ctrica)/i, '514515'],
+    [/reparaci[oó]n|arreglo|mantenimiento|pintura|plomer[ií]a|impermeabiliz|pasamanos|puerta|reja|fachada|techo|ducto|shut|resane|enchape|soldadura/i, '514510'],
+    [/asesor[ií]a|consultor[ií]a|asistencia t[eé]cnica/i, '513515'],
+  ],
+  compras: [
+    [/aseo|detergente|jab[oó]n|limpia|desinfect|cloro|escoba|trapero|bolsa|ambientador|papel higi[eé]nico|toalla|guante|esponja|alguicida|piscina|cafeter[ií]a|caf[eé]\b|az[uú]car|vaso/i, '519525'],
+    [/papeler[ií]a|resma|fotocopia|t[oó]ner|cartucho|lapicer|carpeta|sobre\b|cuaderno|impresi[oó]n/i, '519530'],
+    [/gasolina|combustible|acpm|di[eé]sel|lubricante|aceite de motor/i, '519535'],
+    [/bombillo|l[aá]mpara|led\b|cable|tubo|tuber[ií]a|ferreter|tornillo|pintura|cemento|repuesto|llave\b|niple|codo|grifer|chapa|cerradura|bisagra|teflon|pvc|soldadura/i, '514510'],
+  ],
+};
+function subcuentaPorTexto(categoria, texto) {
+  const reglas = SUBCUENTA_POR_TEXTO[String(categoria || '').toLowerCase()];
+  if (!reglas) return '';
+  const t = String(texto || '');
+  const encontrada = reglas.find(([patron]) => patron.test(t));
+  return encontrada ? encontrada[1] : '';
+}
+
+// Subcuenta preseleccionada para un ítem o una factura, en orden:
+// lo aprendido con ese proveedor, el servicio público que dice el
+// documento, las palabras del texto, y si nada aplica, '' (la pantalla
+// usa la primera opción de la lista).
+function subcuentaSugerida(nit, categoria, texto) {
+  return subcuentaAprendida(nit, categoria)
+    || (categoria === 'servicios_publicos' ? subcuentaServicioPublico(texto) : '')
+    || subcuentaPorTexto(categoria, texto);
+}
+
 // ---------- Subcuenta aprendida por proveedor ----------
 // La última subcuenta de gasto que el contador usó con un proveedor en
 // una categoría (facturas de egreso aprobadas). Se usa como subcuenta
@@ -850,6 +930,36 @@ const IVA_GENERAL = 0.19;
 function consolidarAiuEnItems(items, data) {
   if (!Array.isArray(items) || items.length === 0) return items;
   const datos = data || {};
+
+  // 0) La línea que ES el AIU pertenece al servicio de vigilancia/aseo de
+  //    la misma factura, aunque la IA la haya clasificado como
+  //    "servicios" (pasó con Coraza: se le cobraba 4% de servicios).
+  //    Y si hay una línea explícita de AIU, ella es el AIU completo: los
+  //    AIU que la IA puso dentro de las otras líneas se descartan para no
+  //    contarlo dos veces.
+  const categoriaAiu = (items.find((it) => esCategoriaBaseAiu(it.categoria_concepto) && !ES_LINEA_AIU.test(String(it.descripcion || ''))) || {}).categoria_concepto
+    || (esCategoriaBaseAiu(datos.categoria_concepto) ? String(datos.categoria_concepto).toLowerCase() : '');
+  if (categoriaAiu) {
+    const hermano = items.find((it) => it.categoria_concepto === categoriaAiu && !ES_LINEA_AIU.test(String(it.descripcion || '')));
+    let hayLineaAiu = false;
+    items.forEach((it) => {
+      if (!ES_LINEA_AIU.test(String(it.descripcion || ''))) return;
+      hayLineaAiu = true;
+      if (it.categoria_concepto !== categoriaAiu) {
+        it.categoria_concepto = categoriaAiu;
+        if (hermano && hermano.subcuenta_gasto) it.subcuenta_gasto = hermano.subcuenta_gasto;
+        const config = TARIFAS_RETENCION[categoriaAiu];
+        if (config) it.tarifa_retencion = config.tarifaBaja;
+        it.aiu = '';
+      }
+    });
+    if (hayLineaAiu) {
+      items.forEach((it) => {
+        if (it.categoria_concepto === categoriaAiu && !ES_LINEA_AIU.test(String(it.descripcion || ''))) it.aiu = '';
+      });
+      autoCompletarAiuDesdeDescripcion(items);
+    }
+  }
 
   // 1) AIU imposible
   items.forEach((it) => {
@@ -914,9 +1024,9 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
   if (typeof raw === 'string') {
     try { raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
   }
-  const subcuentaPorDefecto = (categoria) => {
-    const aprendida = subcuentaAprendida(data.nit_cc, categoria);
-    if (aprendida) return aprendida;
+  const subcuentaPorDefecto = (categoria, textoItem) => {
+    const sugerida = subcuentaSugerida(data.nit_cc, categoria, `${data.nombre_razon_social || ''} ${textoItem || data.concepto || ''}`);
+    if (sugerida) return sugerida;
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
     // 'otro' (y cualquier categoría sin subcuentas típicas) ya no tiene
     // un default que adivinar -- queda en blanco y el selector de la
@@ -945,7 +1055,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       cantidad: '', valor_unitario: '',
       subtotal: String(data.valor_sin_iva ?? '0'),
       categoria_concepto: categoria,
-      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      subcuenta_gasto: subcuentaPorDefecto(categoria, data.concepto),
       tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       // AIU (Administración+Imprevistos+Utilidad) -- solo tiene sentido
@@ -964,7 +1074,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       valor_unitario: it.valor_unitario !== undefined && it.valor_unitario !== null ? String(it.valor_unitario) : '',
       subtotal: it.subtotal !== undefined && it.subtotal !== null ? String(it.subtotal) : '0',
       categoria_concepto: categoria,
-      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      subcuenta_gasto: subcuentaPorDefecto(categoria, it.descripcion),
       tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
@@ -1346,6 +1456,9 @@ if (typeof module !== 'undefined' && module.exports) {
     autoCompletarAiuDesdeDescripcion,
     consolidarAiuEnItems,
     registrarSubcuentasAprendidas,
+    subcuentaServicioPublico,
+    subcuentaPorTexto,
+    subcuentaSugerida,
     subcuentaAprendida,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,
@@ -1355,6 +1468,8 @@ if (typeof module !== 'undefined' && module.exports) {
     anioDeFechaFactura,
     umbralPesos,
     perfilFiscalEfectivo,
+    esNitPersonaJuridica,
+    registrarNitsArticulo383,
     calcularRetencionCategoriaLinea,
     calcularRetencionSugerida,
     calcularRetencionSugeridaPorItems,

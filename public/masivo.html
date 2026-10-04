@@ -1965,12 +1965,14 @@ function renderSummary(){
     const sinOpcionesSubcuenta = opcionesEstandarActual.length === 0 && personalizadosActual.length === 0;
     // Subcuenta usada antes con este proveedor (ver subcuentaAprendida()
     // en retenciones.js) -- va antes que la primera opción de la lista.
-    const aprendidaActual = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '';
+    const aprendidaActual = (typeof subcuentaSugerida === 'function')
+      ? subcuentaSugerida(d.nit_cc, categoriaActual, `${d.nombre_razon_social || ''} ${d.concepto || ''}`)
+      : ((typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '');
     const subcuentaActual = d.subcuenta_gasto || aprendidaActual || (personalizadosActual.length > 0 ? personalizadosActual[0].codigo : (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : ''));
     if (!d.subcuenta_gasto) d.subcuenta_gasto = subcuentaActual; // fijar el default la primera vez
     const aprendidaFueraDeLista = aprendidaActual && !opcionesEstandarActual.some(([c]) => c === aprendidaActual) && !personalizadosActual.some((p) => p.codigo === aprendidaActual);
     const estandarOptsActualHTML = (aprendidaFueraDeLista
-      ? `<option value="${escapeHtml(aprendidaActual)}" ${aprendidaActual === subcuentaActual ? 'selected' : ''}>${escapeHtml(aprendidaActual)} — usada antes con este proveedor</option>` : '') +
+      ? `<option value="${escapeHtml(aprendidaActual)}" ${aprendidaActual === subcuentaActual ? 'selected' : ''}>${escapeHtml(aprendidaActual)} — sugerida para este proveedor</option>` : '') +
       opcionesEstandarActual.map(([codigo, nombre]) =>
       `<option value="${codigo}" ${codigo === subcuentaActual ? 'selected' : ''}>${codigo === 'inventario' ? nombre : codigo + ' — ' + nombre}</option>`
     ).join('');
@@ -2057,6 +2059,11 @@ function renderSummary(){
         <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
       </div>
       ${item.errorGuardado ? `<div class="fc-mensaje fc-mensaje-error">${escapeHtml(item.errorGuardado)}</div>` : ''}
+      ${tieneExcepcion(item.data, 'nit_por_verificar') ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
+          <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml((listaExcepciones(item.data).find((x) => x.tipo === 'nit_por_verificar') || {}).detalle || '')}</div>
+        </div>
+      ` : ''}
       ${item.pendienteConfirmarSinNit && tieneExcepcion(item.data, 'sin_nit') ? `
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--stamp-soft);border-radius:var(--r-sm);">
           <div style="color:var(--err);font-size:var(--t-13);">⚠ Este documento no trae NIT/cédula del emisor -- verifica si en realidad no aparece (ábrela con "Revisar" para corregirlo). <button type="button" data-role="guardar-sin-nit" data-idx="${idx}" style="margin-left:4px;font-size:var(--t-12);font-weight:600;padding:4px 9px;border-radius:var(--r-sm);border:1px solid var(--err);background:#fff;color:var(--err);cursor:pointer;">Guardar de todas formas</button></div>
@@ -2551,6 +2558,8 @@ async function requireAuthAndInit(){
     try {
       const subRes = await fetch('/api/subcuentas-aprendidas');
       if (subRes.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await subRes.json());
+      const res383 = await fetch('/api/articulo-383-por-nit');
+      if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
     } catch (e) {
       console.warn('No se pudieron cargar las subcuentas aprendidas:', e.message);
     }
