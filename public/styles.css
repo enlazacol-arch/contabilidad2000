@@ -322,7 +322,7 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .btn--danger, .btn.btn-ember{ background:var(--surface); color:var(--err); border-color:var(--err-line); }
 .btn--danger:hover, .btn.btn-ember:hover{ background:var(--err-bg); color:var(--err); border-color:var(--err); }
 .btn--danger-solid{ background:var(--err); border-color:var(--err); color:#fff; }
-.btn--danger-solid:hover{ background:#912018; border-color:#912018; }
+.btn--danger-solid:hover{ background:var(--err-700); border-color:var(--err-700); }
 .btn--sm{ min-height:32px; padding:var(--s-1) var(--s-3); font-size:var(--t-13); }
 .btn--lg{ min-height:48px; padding:var(--s-3) var(--s-6); font-size:var(--t-16); }
 .btn--block{ width:100%; }
@@ -557,7 +557,7 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .empty-state h3, .error-state h3{ margin:0; font-size:var(--t-16); }
 .skeleton{
   display:block; border-radius:var(--r-sm); min-height:12px;
-  background:linear-gradient(90deg, var(--n-100) 0%, #F4F9FB 50%, var(--n-100) 100%);
+  background:linear-gradient(90deg, var(--n-100) 0%, var(--n-25) 50%, var(--n-100) 100%);
   background-size:200% 100%;
   animation:shimmer 1.4s ease-in-out infinite;
 }

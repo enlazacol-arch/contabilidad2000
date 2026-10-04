@@ -39,7 +39,7 @@
   /* ---------- estados ---------- */
   --ok:#1F7A5A;   --ok-bg:#E3F3EC;   --ok-line:#A9D8C4;
   --warn:#8A5A00; --warn-bg:#FBF3D9; --warn-line:#E8CF8A;
-  --err:#B42318;  --err-bg:#FDECEA;  --err-line:#F1B8B2;
+  --err:#B42318;  --err-bg:#FDECEA;  --err-line:#F1B8B2;  --err-700:#912018;
   --info:#0B4F6C; --info-bg:#EAF3F7; --info-line:#C9DFE9;
   --stamp:#8B5245; --stamp-soft:#F6ECE7;
 
