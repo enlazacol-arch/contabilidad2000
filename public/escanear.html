@@ -2124,15 +2124,15 @@ function renderResult(data){
       function preseleccionarSubcuentaAprendida(){
         if (typeof subcuentaAprendida !== 'function') return;
         const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
-        let aprendida = subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
-        if (!aprendida && input.value === 'servicios_publicos' && typeof subcuentaServicioPublico === 'function' && currentInvoiceData) {
-          aprendida = subcuentaServicioPublico(`${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}`);
-        }
+        const textoFactura = currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '';
+        const aprendida = (typeof subcuentaSugerida === 'function')
+          ? subcuentaSugerida(nitInput ? nitInput.value : '', input.value, textoFactura)
+          : subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
         if (!aprendida) return;
         if (![...subSelect.options].some((o) => o.value === aprendida)) {
           const opt = document.createElement('option');
           opt.value = aprendida;
-          opt.textContent = `${aprendida} — usada antes con este proveedor`;
+          opt.textContent = `${aprendida} — sugerida para este proveedor`;
           subSelect.insertBefore(opt, subSelect.firstChild);
         }
         subSelect.value = aprendida;

@@ -844,6 +844,47 @@ function subcuentaServicioPublico(texto) {
   return encontrada ? encontrada[1] : '';
 }
 
+// ---------- Subcuenta sugerida por el texto del ítem ----------
+// Sin historial con un proveedor, la subcuenta preseleccionada era
+// siempre la primera de la lista (casi siempre "Otros"). Estas palabras,
+// tomadas de la descripción del ítem, proponen la subcuenta precisa
+// (probado con las facturas reales del Conjunto Bosques de la Macarena:
+// reparaciones, mantenimiento de bombas, productos de aseo...). Es solo
+// la preselección: el contador la confirma o la cambia, y desde ese
+// momento manda lo aprendido para ese proveedor.
+const SUBCUENTA_POR_TEXTO = {
+  servicios: [
+    [/procesamiento|software|licencia|facturaci[oó]n electr[oó]nica|hosting|nube|plataforma/i, '513520'],
+    [/transporte|flete|acarreo|mensajer[ií]a/i, '513550'],
+    [/(mantenimiento|reparaci[oó]n|arreglo|revisi[oó]n|precarga|instalaci[oó]n).*(bomba|motobomba|hidroflo|motor|equipo|planta|ascensor|m[aá]quina|tablero)|(bomba|motobomba|hidroflo|motor|ascensor|planta el[eé]ctrica)/i, '514515'],
+    [/reparaci[oó]n|arreglo|mantenimiento|pintura|plomer[ií]a|impermeabiliz|pasamanos|puerta|reja|fachada|techo|ducto|shut|resane|enchape|soldadura/i, '514510'],
+    [/asesor[ií]a|consultor[ií]a|asistencia t[eé]cnica/i, '513515'],
+  ],
+  compras: [
+    [/aseo|detergente|jab[oó]n|limpia|desinfect|cloro|escoba|trapero|bolsa|ambientador|papel higi[eé]nico|toalla|guante|esponja|alguicida|piscina|cafeter[ií]a|caf[eé]\b|az[uú]car|vaso/i, '519525'],
+    [/papeler[ií]a|resma|fotocopia|t[oó]ner|cartucho|lapicer|carpeta|sobre\b|cuaderno|impresi[oó]n/i, '519530'],
+    [/gasolina|combustible|acpm|di[eé]sel|lubricante|aceite de motor/i, '519535'],
+    [/bombillo|l[aá]mpara|led\b|cable|tubo|tuber[ií]a|ferreter|tornillo|pintura|cemento|repuesto|llave\b|niple|codo|grifer|chapa|cerradura|bisagra|teflon|pvc|soldadura/i, '514510'],
+  ],
+};
+function subcuentaPorTexto(categoria, texto) {
+  const reglas = SUBCUENTA_POR_TEXTO[String(categoria || '').toLowerCase()];
+  if (!reglas) return '';
+  const t = String(texto || '');
+  const encontrada = reglas.find(([patron]) => patron.test(t));
+  return encontrada ? encontrada[1] : '';
+}
+
+// Subcuenta preseleccionada para un ítem o una factura, en orden:
+// lo aprendido con ese proveedor, el servicio público que dice el
+// documento, las palabras del texto, y si nada aplica, '' (la pantalla
+// usa la primera opción de la lista).
+function subcuentaSugerida(nit, categoria, texto) {
+  return subcuentaAprendida(nit, categoria)
+    || (categoria === 'servicios_publicos' ? subcuentaServicioPublico(texto) : '')
+    || subcuentaPorTexto(categoria, texto);
+}
+
 // ---------- Subcuenta aprendida por proveedor ----------
 // La última subcuenta de gasto que el contador usó con un proveedor en
 // una categoría (facturas de egreso aprobadas). Se usa como subcuenta
@@ -983,13 +1024,9 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
   if (typeof raw === 'string') {
     try { raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
   }
-  const subcuentaPorDefecto = (categoria) => {
-    const aprendida = subcuentaAprendida(data.nit_cc, categoria);
-    if (aprendida) return aprendida;
-    if (categoria === 'servicios_publicos') {
-      const porServicio = subcuentaServicioPublico(`${data.nombre_razon_social || ''} ${data.concepto || ''}`);
-      if (porServicio) return porServicio;
-    }
+  const subcuentaPorDefecto = (categoria, textoItem) => {
+    const sugerida = subcuentaSugerida(data.nit_cc, categoria, `${data.nombre_razon_social || ''} ${textoItem || data.concepto || ''}`);
+    if (sugerida) return sugerida;
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
     // 'otro' (y cualquier categoría sin subcuentas típicas) ya no tiene
     // un default que adivinar -- queda en blanco y el selector de la
@@ -1018,7 +1055,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       cantidad: '', valor_unitario: '',
       subtotal: String(data.valor_sin_iva ?? '0'),
       categoria_concepto: categoria,
-      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      subcuenta_gasto: subcuentaPorDefecto(categoria, data.concepto),
       tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       // AIU (Administración+Imprevistos+Utilidad) -- solo tiene sentido
@@ -1037,7 +1074,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       valor_unitario: it.valor_unitario !== undefined && it.valor_unitario !== null ? String(it.valor_unitario) : '',
       subtotal: it.subtotal !== undefined && it.subtotal !== null ? String(it.subtotal) : '0',
       categoria_concepto: categoria,
-      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      subcuenta_gasto: subcuentaPorDefecto(categoria, it.descripcion),
       tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
@@ -1420,6 +1457,8 @@ if (typeof module !== 'undefined' && module.exports) {
     consolidarAiuEnItems,
     registrarSubcuentasAprendidas,
     subcuentaServicioPublico,
+    subcuentaPorTexto,
+    subcuentaSugerida,
     subcuentaAprendida,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,

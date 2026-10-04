@@ -501,3 +501,12 @@ test('AIU: la línea "AIU" mal clasificada como servicios y AIU repetidos en las
   assert.equal(data.items[2].categoria_concepto, 'vigilancia_aseo');
   assert.equal(s.bajo, 47963); // antes: 139.089
 });
+
+test('subcuenta sugerida por el texto del ítem (facturas reales del conjunto)', () => {
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Reparación shut de basuras con cambio de ducto'), '514510');
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Precarga de hidroflo y revisión de motobomba'), '514515');
+  assert.equal(RA.subcuentaPorTexto('servicios', 'Procesamiento Facturas de Administración'), '513520');
+  assert.equal(RA.subcuentaPorTexto('compras', 'CLORO GRANULADO AL 70% X 1KG'), '519525');
+  assert.equal(RA.subcuentaPorTexto('compras', 'Resma papel carta'), '519530');
+  assert.equal(RA.subcuentaPorTexto('compras', 'Multifuncional L32'), ''); // sin pista: lista general
+});
