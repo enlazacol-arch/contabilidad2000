@@ -6,86 +6,87 @@
 <title>Enlaza — Integraciones</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <style>
   .wrap{ max-width:820px; }
 
   .integ-card{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
     padding:26px 28px; margin-bottom:18px; box-shadow:var(--shadow-sm);
   }
   .integ-head{ display:flex; align-items:center; gap:14px; margin-bottom:6px; }
   .integ-head .integ-icon{
-    width:42px; height:42px; border-radius:10px; flex-shrink:0;
+    width:42px; height:42px; border-radius:var(--r-md); flex-shrink:0;
     display:flex; align-items:center; justify-content:center;
-    font-family:'Archivo',sans-serif; font-weight:800; font-size:16px; color:#fff;
-    background:#1F9D55; /* verde de marca de Alegra -- solo aquí, para identificarla de un vistazo */
+    font-family:var(--font-display); font-weight:800; font-size:var(--t-16); color:#fff;
+    background:var(--ok); /* verde de marca de Alegra -- solo aquí, para identificarla de un vistazo */
   }
-  .integ-head h2{ font-family:'Archivo',sans-serif; font-size:17px; margin:0; color:var(--ink); }
+  .integ-head h2{ font-family:var(--font-display); font-size:var(--t-18); margin:0; color:var(--ink); }
   .integ-head .estado{
-    margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
-    padding:4px 11px; border-radius:100px; white-space:nowrap;
+    margin-left:auto; font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.04em;
+    padding:4px 11px; border-radius:var(--r-pill); white-space:nowrap;
   }
-  .estado.conectado{ background:var(--moss-tint); color:var(--moss-deep); }
-  .estado.desconectado{ background:#EAF3F7; color:var(--ink-soft); }
+  .estado.conectado{ background:var(--ok-bg); color:var(--ok); }
+  .estado.desconectado{ background:var(--n-100); color:var(--ink-soft); }
 
-  .integ-desc{ font-size:13.5px; color:var(--ink-soft); line-height:1.55; margin:10px 0 18px; max-width:56ch; }
+  .integ-desc{ font-size:var(--t-14); color:var(--ink-soft); line-height:1.55; margin:10px 0 18px; max-width:56ch; }
 
   .integ-form{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   @media (max-width:560px){ .integ-form{ grid-template-columns:1fr; } }
   .integ-form label{
-    display:block; font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    display:block; font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase;
     letter-spacing:.05em; color:var(--ink-faint); margin-bottom:6px;
   }
   .integ-form input{
-    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:7px;
-    font-family:'Inter',sans-serif; font-size:13.5px; color:var(--ink); background:var(--paper);
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-sm);
+    font-family:var(--font-ui); font-size:var(--t-14); color:var(--ink); background:var(--paper);
   }
   .integ-form input:focus{ outline:none; border-color:var(--petroleo); }
   .integ-hint{
-    grid-column:1 / -1; font-size:12px; color:var(--ink-faint); line-height:1.5; margin-top:-4px;
+    grid-column:1 / -1; font-size:var(--t-12); color:var(--ink-faint); line-height:1.5; margin-top:-4px;
   }
   .integ-hint a{ color:var(--petroleo-deep); }
   .integ-actions{ grid-column:1 / -1; display:flex; align-items:center; gap:12px; margin-top:4px; }
 
   .conectado-info{ display:flex; flex-wrap:wrap; gap:22px; margin-bottom:16px; }
   .conectado-info .campo .k{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint);
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint);
   }
-  .conectado-info .campo .v{ font-size:13.5px; color:var(--ink); margin-top:3px; }
+  .conectado-info .campo .v{ font-size:var(--t-14); color:var(--ink); margin-top:3px; }
 
   .integ-msg{
-    margin-top:14px; padding:11px 13px; border-radius:8px; font-size:12.5px; line-height:1.5; display:none;
+    margin-top:14px; padding:11px 13px; border-radius:var(--r-sm); font-size:var(--t-13); line-height:1.5; display:none;
   }
   .integ-msg.show{ display:block; }
-  .integ-msg.err{ background:var(--stamp-soft); border:1px solid var(--stamp); color:#7A2E1B; }
-  .integ-msg.ok{ background:var(--moss-tint); border:1px solid var(--moss); color:var(--moss-deep); }
+  .integ-msg.err{ background:var(--stamp-soft); border:1px solid var(--stamp); color:var(--err); }
+  .integ-msg.ok{ background:var(--ok-bg); border:1px solid var(--ok-line); color:var(--ok); }
 
   .proximamente{ opacity:.55; }
   .proximamente .integ-icon{ background:var(--ink-faint); }
-  .proximamente .estado{ background:#EAF3F7; color:var(--ink-faint); }
+  .proximamente .estado{ background:var(--n-100); color:var(--ink-faint); }
 
   /* Igual al panel de "sin acceso" de Mi firma -- conectar/desconectar
      el software contable es una decisión de administrador/contador,
      no de quien solo escanea o solo consulta. */
   .no-acceso{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    padding:40px 30px; text-align:center; box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
+    padding:40px 30px; text-align:center; box-shadow:var(--sh-2);
   }
-  .no-acceso h2{ font-family:'Archivo',sans-serif; font-size:18px; margin:0 0 8px; }
-  .no-acceso p{ color:var(--ink-soft,#4A5E68); font-size:13.5px; max-width:52ch; margin:0 auto; }
+  .no-acceso h2{ font-family:var(--font-display); font-size:var(--t-18); margin:0 0 8px; }
+  .no-acceso p{ color:var(--ink-soft); font-size:var(--t-14); max-width:52ch; margin:0 auto; }
   .no-acceso .mi-rol{
-    display:inline-block; margin-top:16px; font-family:'JetBrains Mono',monospace; font-size:11.5px;
-    padding:5px 12px; border-radius:100px; background:var(--petroleo-soft); color:var(--petroleo-deep);
+    display:inline-block; margin-top:16px; font-family:var(--font-num); font-size:var(--t-12);
+    padding:5px 12px; border-radius:var(--r-pill); background:var(--petroleo-soft); color:var(--petroleo-deep);
   }
 
   /* Segundo paso de conexión (hoy, solo Siigo): el contador elige de
      su PROPIA cuenta qué tipo de comprobante y qué forma de pago usar
      -- son ids que Enlaza nunca podría adivinar. */
   .integ-config select{
-    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:7px;
-    font-family:'Inter',sans-serif; font-size:13.5px; color:var(--ink); background:var(--paper); cursor:pointer;
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-sm);
+    font-family:var(--font-ui); font-size:var(--t-14); color:var(--ink); background:var(--paper); cursor:pointer;
   }
   .integ-config select:focus{ outline:none; border-color:var(--petroleo); }
 </style>
