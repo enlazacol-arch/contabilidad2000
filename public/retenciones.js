@@ -227,34 +227,47 @@ const CUENTAS_PUC_FIJAS = {
 // La primera opción de cada lista es la que se preselecciona por
 // defecto (la más común), pero el contador puede cambiarla siempre.
 const SUBCUENTAS_GASTO = {
+  // Códigos verificados contra el PUC (Decreto 2650 de 1993, puc.com.co,
+  // oct. 2026). Antes la primera opción de "compras" era Inventarios
+  // (mercancía para revender): para clientes que no revenden (ej. una
+  // propiedad horizontal) cada compra de aseo o repuestos quedaba como
+  // activo. Ahora va primero el gasto, e Inventarios queda al final.
   compras: [
-    ['inventario', 'Inventarios -- mercancía para reventa'],
-    ['519530', 'Útiles, papelería y fotocopias'],
+    ['519595', 'Otros (Diversos)'],
     ['519525', 'Elementos de aseo y cafetería'],
+    ['519530', 'Útiles, papelería y fotocopias'],
     ['519535', 'Combustibles y lubricantes'],
     ['519540', 'Envases y empaques'],
-    ['519595', 'Otros (Diversos)'],
+    ['514510', 'Mantenimiento y reparaciones -- construcciones y edificaciones'],
+    ['514515', 'Mantenimiento y reparaciones -- maquinaria y equipo'],
+    ['inventario', 'Inventarios -- solo mercancía para reventa'],
   ],
   compras_tarjeta: [
-    ['519530', 'Útiles, papelería y fotocopias'],
-    ['519525', 'Elementos de aseo y cafetería'],
-    ['519535', 'Combustibles y lubricantes'],
     ['519595', 'Otros (Diversos)'],
+    ['519525', 'Elementos de aseo y cafetería'],
+    ['519530', 'Útiles, papelería y fotocopias'],
+    ['519535', 'Combustibles y lubricantes'],
   ],
+  // Grupo 5135 tal como está en el PUC. Antes había códigos que no
+  // existen (513560, 513565, 513570) y 513545 aparecía como "Publicidad"
+  // cuando en el PUC es "Fax y télex". El mantenimiento y las
+  // reparaciones tienen su propio grupo, 5145.
   servicios: [
     ['513595', 'Servicios -- Otros'],
+    ['514510', 'Mantenimiento y reparaciones -- construcciones y edificaciones'],
+    ['514515', 'Mantenimiento y reparaciones -- maquinaria y equipo'],
+    ['514520', 'Mantenimiento y reparaciones -- equipo de oficina'],
+    ['514525', 'Mantenimiento y reparaciones -- equipo de computación y comunicación'],
+    ['513505', 'Aseo y vigilancia'],
     ['513510', 'Temporales'],
-    ['513515', 'Asesoría y asistencia técnica'],
+    ['513515', 'Asistencia técnica'],
     ['513520', 'Procesamiento electrónico de datos'],
     ['513525', 'Acueducto y alcantarillado'],
     ['513530', 'Energía eléctrica'],
     ['513535', 'Teléfono'],
-    ['513540', 'Correo, portes y telégrafo'],
-    ['513545', 'Publicidad y propaganda'],
+    ['513540', 'Correo, portes y telegramas'],
+    ['513550', 'Transporte, fletes y acarreos'],
     ['513555', 'Gas'],
-    ['513560', 'Servicios de aseo (contratado, sin ser vigilancia/aseo fijo)'],
-    ['513565', 'Fletes y acarreos menores'],
-    ['513570', 'Mantenimiento y reparaciones (equipos/oficina)'],
   ],
   honorarios_juridica: [
     ['511095', 'Honorarios -- Otros'],
@@ -309,8 +322,14 @@ const SUBCUENTAS_GASTO = {
   // default disfrazado de elección (ver poblarSubcuentas() en
   // escanear.html y campoSubcuentaHtml() en revision.html).
   otro: [],
+  // 513528 "Servicios públicos" no existe en el PUC -- cada servicio
+  // tiene su propia subcuenta dentro de 5135.
   servicios_publicos: [
-    ['513528', 'Servicios públicos'],
+    ['513530', 'Energía eléctrica'],
+    ['513525', 'Acueducto y alcantarillado'],
+    ['513535', 'Teléfono'],
+    ['513555', 'Gas'],
+    ['513505', 'Aseo y vigilancia'],
   ],
 };
 
