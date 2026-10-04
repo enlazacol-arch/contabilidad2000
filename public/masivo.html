@@ -2097,6 +2097,13 @@ function renderSummary(){
           <div style="color:#7A2E1B;font-size:12.5px;">⚠ "Sin IVA" + "IVA" ($${((Number(item.data.valor_sin_iva) || 0) + (Number(item.data.valor_iva) || 0)).toLocaleString('es-CO')}) no coincide con "Con IVA" ($${(Number(item.data.valor_con_iva) || 0).toLocaleString('es-CO')}) -- si se guarda así, no se generará el asiento contable automático (ábrela con "Revisar" para corregirlo). <button type="button" data-role="guardar-descuadre" data-idx="${idx}" style="margin-left:4px;font-size:12px;font-weight:600;padding:4px 9px;border-radius:6px;border:1px solid #B0402D;background:#fff;color:#7A2E1B;cursor:pointer;">Guardar de todas formas</button></div>
         </div>
       ` : ''}
+      ${item.pendienteConfirmarRetencion && retencionOlvidadaItem(item) ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
+          <div style="color:var(--warn);font-size:var(--t-13);">⚠ El sistema calcula una Rete Fuente de <b>$${retencionOlvidadaItem(item).bajo.toLocaleString('es-CO')}</b> para esta factura, pero quedó en $0.
+            <button type="button" class="btn btn--sm" data-role="usar-retencion" data-idx="${idx}" style="margin-left:4px;">Usar $${retencionOlvidadaItem(item).bajo.toLocaleString('es-CO')} y guardar</button>
+            <button type="button" class="btn ghost btn--sm" data-role="guardar-sin-retencion" data-idx="${idx}">Guardar sin retención</button></div>
+        </div>
+      ` : ''}
     `;
     summaryBody.appendChild(card);
   });
@@ -2307,6 +2314,24 @@ function descuadreItem(data){
   return valoresDescuadrados(data);
 }
 
+// Retención en la fuente olvidada: el sistema calcula una Rete Fuente
+// sugerida para esta factura pero el campo quedó en $0. Escanear ya
+// avisaba esto al guardar; Carga masiva no, y las facturas se guardaban
+// sin retención en silencio (reporte de revisión contable, oct. 2026).
+// Devuelve la sugerencia, o null si no hay nada que avisar.
+function retencionOlvidadaItem(item){
+  const d = item && item.data ? item.data : {};
+  if ((Number(d.rete_fuente) || 0) > 0) return null;
+  if (typeof calcularRetencionSugerida !== 'function') return null;
+  const cliente = myClients.find(c => c.id === item.clienteId);
+  if (!cliente) return null;
+  const categorias = Object.keys(d.desglose_categorias || {});
+  const acumulados = acumuladosParaFacturaMasivo(d.nit_cc, categorias.length > 0 ? categorias : [d.categoria_concepto], d.fecha_factura);
+  const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc), acumulados);
+  if (!sugerido || sugerido.aplicaArticulo383 || sugerido.requiereAiu || !(sugerido.bajo > 0)) return null;
+  return sugerido;
+}
+
 // `forzarSinNit` viene en true solo cuando el contador ya vio el aviso
 // de "sin NIT" y le dio clic explícito a "Guardar de todas formas" --
 // igual `forzarLetras` para el aviso de valor en letras vs. en números.
@@ -2350,6 +2375,13 @@ async function guardarFacturaIndividual(idx, btn, forzarSinNit, forzarLetras, fo
     return;
   }
   item.pendienteConfirmarDescuadre = false;
+
+  if (retencionOlvidadaItem(item) && !item.confirmoSinRetencion) {
+    item.pendienteConfirmarRetencion = true;
+    renderSummary();
+    return;
+  }
+  item.pendienteConfirmarRetencion = false;
 
   btn.disabled = true;
   btn.textContent = 'Guardando...';
@@ -2418,6 +2450,22 @@ summaryBody.addEventListener('click', (e) => {
     return;
   }
 
+  const btnRetencion = e.target.closest('[data-role="usar-retencion"], [data-role="guardar-sin-retencion"]');
+  if (btnRetencion) {
+    const idx = Number(btnRetencion.dataset.idx);
+    const item = lote[idx];
+    if (!item) return;
+    if (btnRetencion.dataset.role === 'usar-retencion') {
+      const sugerido = retencionOlvidadaItem(item);
+      if (sugerido) item.data.rete_fuente = sugerido.bajo;
+      guardarEdicionItem(item);
+    } else {
+      item.confirmoSinRetencion = true;
+    }
+    guardarFacturaIndividual(idx, btnRetencion, false, false, false);
+    return;
+  }
+
   const btnGuardarDescuadre = e.target.closest('[data-role="guardar-descuadre"]');
   if (btnGuardarDescuadre) {
     const idx = Number(btnGuardarDescuadre.dataset.idx);
@@ -2463,8 +2511,12 @@ btnGuardarTodas.addEventListener('click', async () => {
   // "Con IVA" se salta en el guardado masivo y queda marcada en su
   // tarjeta, en vez de guardarse en silencio sin su asiento contable.
   const sinCuadrar = conLetrasOk.filter((i) => descuadreItem(i.data));
-  const paraGuardar = conLetrasOk.filter((i) => !descuadreItem(i.data));
+  const cuadradas = conLetrasOk.filter((i) => !descuadreItem(i.data));
   sinCuadrar.forEach((i) => { i.pendienteConfirmarDescuadre = true; });
+  // Retención sugerida que quedó en $0 -- tampoco se guarda en silencio.
+  const sinRetencion = cuadradas.filter((i) => retencionOlvidadaItem(i) && !i.confirmoSinRetencion);
+  const paraGuardar = cuadradas.filter((i) => !(retencionOlvidadaItem(i) && !i.confirmoSinRetencion));
+  sinRetencion.forEach((i) => { i.pendienteConfirmarRetencion = true; });
   let guardadas = 0;
   for (const item of paraGuardar) {
     const resultado = await guardarUnaFactura(item);
@@ -2476,6 +2528,7 @@ btnGuardarTodas.addEventListener('click', async () => {
   if (sinNit.length > 0) avisos.push(`${sinNit.length} sin NIT/cédula del emisor`);
   if (sinLetrasOk.length > 0) avisos.push(`${sinLetrasOk.length} con el valor en letras distinto al de números`);
   if (sinCuadrar.length > 0) avisos.push(`${sinCuadrar.length} con "sin IVA + IVA" distinto de "con IVA"`);
+  if (sinRetencion.length > 0) avisos.push(`${sinRetencion.length} con retención sugerida en $0`);
   btnGuardarTodas.textContent = avisos.length > 0
     ? `✓ ${guardadas} guardadas -- ${avisos.join(', ')}, no se guardaron`
     : `✓ ${guardadas} facturas guardadas`;
