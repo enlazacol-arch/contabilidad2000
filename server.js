@@ -1814,35 +1814,9 @@ const CATEGORIAS_CONCEPTO_VALIDAS = [
   'servicios_publicos', 'otro',
 ];
 
-// Encabezados aceptados en el CSV de importación masiva -- igual de
-// tolerante que el importador de extractos bancarios (cartera.js):
-// acepta con/sin tilde y algunos sinónimos razonables.
-const PUC_COLUMNAS_CATEGORIA = ['categoria_fiscal', 'categoria', 'categoría'];
-const PUC_COLUMNAS_CODIGO = ['codigo', 'código', 'cuenta', 'codigo puc', 'código puc'];
-const PUC_COLUMNAS_CONCEPTO = ['concepto', 'nombre', 'descripcion', 'descripción'];
-
-// Columnas extra del PUC exportado por el programa contable del cliente
-// (ej. Contai: "Tipo de Cuenta, Id. Recibe Movto., Porcentaje Base,
-// Activo"). Todas opcionales: un CSV con solo código y nombre sigue
-// funcionando igual que antes.
-const PUC_COLUMNAS_RECIBE = ['recibe movimiento', 'recibe_movimiento', 'movimiento', 'id. recibe movto.', 'recibe movto.', 'recibe movto'];
-const PUC_COLUMNAS_ACTIVO = ['activo', 'activa', 'estado'];
-const PUC_COLUMNAS_PORCENTAJE = ['porcentaje', 'porcentaje base', 'tarifa', '%'];
-const PUC_COLUMNAS_TIPO = ['tipo de cuenta', 'tipo cuenta', 'tipo_cuenta'];
-
-// "S", "Si", "X", "1", "true" -> true; "N", "No", "0", "false" -> false;
-// vacío o desconocido -> el valor por defecto.
-function leerSiNoPuc(valor, porDefecto) {
-  const v = String(valor == null ? '' : valor).trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-  if (['S', 'SI', 'Y', 'YES', 'X', '1', 'TRUE', 'ACTIVO', 'ACTIVA'].includes(v)) return true;
-  if (['N', 'NO', '0', 'FALSE', 'INACTIVO', 'INACTIVA'].includes(v)) return false;
-  return porDefecto;
-}
-// "4", "2.5", "2,5", "4%" -> número; 0 o vacío -> null (la cuenta no tiene tarifa).
-function leerPorcentajePuc(valor) {
-  const n = Number(String(valor == null ? '' : valor).replace('%', '').replace(',', '.').trim());
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+// Lectura de columnas del CSV/Excel del plan de cuentas y de sus valores
+// (S/N, porcentajes): ver filasPucDesdeTabla() en public/puc-cliente.js.
+const { leerSiNoPuc, leerPorcentajePuc, filasPucDesdeTabla } = pucCliente;
 
 // Una fila de la tabla tal como la usa el navegador: con el nivel del PUC
 // y, si aplica, por qué la cuenta parece obsoleta (para depurar el plan).
@@ -2013,63 +1987,13 @@ app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrado
     if (filas.length < 2) {
       return res.status(400).json({ error: 'El archivo no parece tener datos -- se necesita una fila de encabezados y al menos una fila con un código.' });
     }
-    const encabezados = filas[0].map(cartera.normalizarEncabezado);
-    // La columna de categoría es OPCIONAL -- distintos sistemas externos
-    // (Contaia, Siigo, Excel armado a mano...) no siempre la traen, y
-    // antes el importador rechazaba el archivo completo si no aparecía
-    // con uno de estos nombres exactos. Ahora, si no se encuentra, cada
-    // fila se guarda con categoría "otro" (se puede reclasificar luego a
-    // mano desde la tabla de arriba).
-    //
-    // Además de los sinónimos de una sola palabra (PUC_COLUMNAS_*), un
-    // plan de cuentas real (ej. exportado de Siigo) suele traer el
-    // encabezado en DOS palabras -- "Código Cuenta", "Nombre Cuenta" --
-    // que no calza con una igualdad exacta. encontrarColumnaPuc() primero
-    // intenta la igualdad exacta de siempre y, si no la encuentra, cae a
-    // buscar la palabra clave COMO SUBSTRING dentro del encabezado
-    // completo (ignorando acentos), sin repetir una columna ya asignada.
-    const quitarAcentos = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    function encontrarColumnaPuc(listaExacta, palabrasClaveSubstring, usados) {
-      let i = encabezados.findIndex((h, pos) => !usados.includes(pos) && listaExacta.includes(h));
-      if (i !== -1) return i;
-      return encabezados.findIndex((h, pos) => !usados.includes(pos) && palabrasClaveSubstring.some((p) => quitarAcentos(h).includes(p)));
-    }
-    const iCategoria = encontrarColumnaPuc(PUC_COLUMNAS_CATEGORIA, ['categoria'], []);
-    const usadosTrasCategoria = iCategoria === -1 ? [] : [iCategoria];
-    const iCodigo = encontrarColumnaPuc(PUC_COLUMNAS_CODIGO, ['codigo'], usadosTrasCategoria);
-    const usadosTrasCodigo = iCodigo === -1 ? usadosTrasCategoria : [...usadosTrasCategoria, iCodigo];
-    const iConcepto = encontrarColumnaPuc(PUC_COLUMNAS_CONCEPTO, ['nombre', 'concepto', 'descripcion'], usadosTrasCodigo);
-    if (iCodigo === -1 || iConcepto === -1) {
-      return res.status(400).json({ error: 'No se reconocieron las columnas del archivo -- se necesita al menos una columna de "codigo" y una de "concepto" en la primera fila.' });
-    }
-    // Columnas extra del PUC exportado (Contai y similares), opcionales.
-    const usadosBase = [iCategoria, iCodigo, iConcepto].filter((i) => i !== -1);
-    const iRecibe = encontrarColumnaPuc(PUC_COLUMNAS_RECIBE, ['recibe'], usadosBase);
-    const iActivo = encontrarColumnaPuc(PUC_COLUMNAS_ACTIVO, [], usadosBase);
-    const iPorcentaje = encontrarColumnaPuc(PUC_COLUMNAS_PORCENTAJE, ['porcentaje', 'tarifa'], usadosBase);
-    const iTipo = encontrarColumnaPuc(PUC_COLUMNAS_TIPO, ['tipo de cuenta', 'tipo cuenta'], usadosBase);
-    const celda = (fila, i) => (i === -1 ? '' : fila[i]);
-
+    const { filasCrudas, error } = filasPucDesdeTabla(filas);
+    if (error) return res.status(400).json({ error });
     // Un archivo guardado en Latin-1 que llegó leído como UTF-8 trae "�"
     // en lugar de las tildes; el navegador ya intenta leerlo bien, esto es
     // solo por si alguien llama a la API directamente.
-    if (csvTexto.includes('�')) {
+    if (csvTexto.includes('\uFFFD')) {
       console.warn('PUC importado con caracteres ilegibles (codificación del archivo)');
-    }
-
-    const filasCrudas = [];
-    for (let r = 1; r < filas.length; r++) {
-      const fila = filas[r];
-      filasCrudas.push({
-        numeroFila: r + 1,
-        categoria: celda(fila, iCategoria),
-        codigo: fila[iCodigo],
-        concepto: fila[iConcepto],
-        recibe_movimiento: celda(fila, iRecibe),
-        activo: celda(fila, iActivo),
-        porcentaje: celda(fila, iPorcentaje),
-        tipo_cuenta: celda(fila, iTipo),
-      });
     }
 
     const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas);

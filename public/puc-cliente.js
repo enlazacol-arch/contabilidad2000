@@ -205,6 +205,68 @@ function cuentaIvaGastoCliente(pucCliente, codigoGasto) {
   return null;
 }
 
+// ---------- Lectura del archivo del plan de cuentas ----------
+
+// Encabezados aceptados (sin tildes ni mayúsculas). Solo código y nombre
+// son obligatorios; el resto viene en exportaciones como la de Contai
+// ("Codigo, Concepto, Tipo de Cuenta, Id. Recibe Movto., ..., Porcentaje
+// Base, ..., Activo").
+const PUC_COLUMNAS = {
+  categoria: { exactas: ['categoria_fiscal', 'categoria'], contiene: ['categoria'] },
+  codigo: { exactas: ['codigo', 'cuenta', 'codigo puc'], contiene: ['codigo'] },
+  concepto: { exactas: ['concepto', 'nombre', 'descripcion'], contiene: ['nombre', 'concepto', 'descripcion'] },
+  recibe_movimiento: { exactas: ['recibe movimiento', 'recibe_movimiento', 'movimiento', 'id. recibe movto.', 'recibe movto.', 'recibe movto'], contiene: ['recibe'] },
+  activo: { exactas: ['activo', 'activa', 'estado'], contiene: [] },
+  porcentaje: { exactas: ['porcentaje', 'porcentaje base', 'tarifa', '%'], contiene: ['porcentaje', 'tarifa'] },
+  tipo_cuenta: { exactas: ['tipo de cuenta', 'tipo cuenta', 'tipo_cuenta'], contiene: ['tipo de cuenta', 'tipo cuenta'] },
+};
+
+// "S", "Si", "X", "1", "true" -> true; "N", "No", "0", "false" -> false;
+// vacío o desconocido -> el valor por defecto.
+function leerSiNoPuc(valor, porDefecto) {
+  const v = String(valor == null ? '' : valor).trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (['S', 'SI', 'Y', 'YES', 'X', '1', 'TRUE', 'ACTIVO', 'ACTIVA'].includes(v)) return true;
+  if (['N', 'NO', '0', 'FALSE', 'INACTIVO', 'INACTIVA'].includes(v)) return false;
+  return porDefecto;
+}
+
+// "4", "2.5", "2,5", "4%" -> número; 0 o vacío -> null (sin tarifa).
+function leerPorcentajePuc(valor) {
+  const n = Number(String(valor == null ? '' : valor).replace('%', '').replace(',', '.').trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// De la tabla ya separada en celdas (primera fila = encabezados) a filas
+// { numeroFila, categoria, codigo, concepto, recibe_movimiento, activo,
+// porcentaje, tipo_cuenta }. Cada columna se busca primero por nombre
+// exacto y luego por palabra contenida ("Código Cuenta", "Nombre
+// Cuenta"), sin repetir una columna ya asignada.
+// Devuelve { filasCrudas } o { error } si faltan código o nombre.
+function filasPucDesdeTabla(filas) {
+  const normalizar = (s) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const encabezados = (filas[0] || []).map(normalizar);
+  const usados = [];
+  const columna = (campo) => {
+    const { exactas, contiene } = PUC_COLUMNAS[campo];
+    let i = encabezados.findIndex((h, pos) => !usados.includes(pos) && exactas.includes(h));
+    if (i === -1) i = encabezados.findIndex((h, pos) => !usados.includes(pos) && contiene.some((p) => h.includes(p)));
+    if (i !== -1) usados.push(i);
+    return i;
+  };
+  const indices = {};
+  for (const campo of Object.keys(PUC_COLUMNAS)) indices[campo] = columna(campo);
+  if (indices.codigo === -1 || indices.concepto === -1) {
+    return { error: 'No se reconocieron las columnas del archivo -- se necesita al menos una columna de "codigo" y una de "concepto" (o "nombre") en la primera fila.' };
+  }
+  const filasCrudas = [];
+  for (let r = 1; r < filas.length; r++) {
+    const fila = {};
+    for (const campo of Object.keys(PUC_COLUMNAS)) fila[campo] = indices[campo] === -1 ? '' : (filas[r][indices[campo]] || '');
+    filasCrudas.push({ numeroFila: r + 1, ...fila });
+  }
+  return { filasCrudas };
+}
+
 function nombreCuentaCliente(pucCliente, codigo) {
   const c = (Array.isArray(pucCliente) ? pucCliente : []).find((x) => String(x.codigo) === String(codigo));
   return c ? String(c.concepto || '').trim() : '';
@@ -221,5 +283,8 @@ if (typeof module !== 'undefined' && module.exports) {
     cuentaRetencionCliente,
     cuentaIvaGastoCliente,
     nombreCuentaCliente,
+    leerSiNoPuc,
+    leerPorcentajePuc,
+    filasPucDesdeTabla,
   };
 }

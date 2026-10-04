@@ -121,3 +121,48 @@ test('nombreCuentaCliente', () => {
   assert.equal(nombreCuentaCliente(PLAN, '51451501'), 'EQUIPO DE BOMBEO');
   assert.equal(nombreCuentaCliente(PLAN, '999999'), '');
 });
+
+// ---------- lectura del archivo ----------
+
+const { leerSiNoPuc, leerPorcentajePuc, filasPucDesdeTabla } = require('../public/puc-cliente');
+const cartera = require('../cartera');
+
+test('filasPucDesdeTabla: formato exportado por Contai (con tildes en Latin-1 ya decodificado)', () => {
+  const csv = 'Codigo,Concepto,Tipo de Cuenta,Id. Recibe Movto.,Id. Centro Costo,Id. Ajustes,Porcentaje Base,Tipo Plazo,Activo\n'
+    + '5135,GASTOS POR SERVICIOS          ,N,N,N,,0,N,S\n'
+    + '513540,"CORREO, PORTES Y TELEGRAMAS   ",S,S,S,N,0,N,S\n'
+    + '23652502,RETEFTE SERVICIOS 4%          ,B,S,N,N,4,N,S\n'
+    + '51451501,DEPRECIACIÓN EQUIPO,S,S,N,N,0,N,N\n';
+  const { filasCrudas, error } = filasPucDesdeTabla(cartera.parsearFilasCSV(csv));
+  assert.equal(error, undefined);
+  assert.equal(filasCrudas.length, 4);
+  assert.deepEqual(
+    { codigo: filasCrudas[0].codigo, recibe: filasCrudas[0].recibe_movimiento, activo: filasCrudas[0].activo, categoria: filasCrudas[0].categoria },
+    { codigo: '5135', recibe: 'N', activo: 'S', categoria: '' }
+  );
+  assert.equal(filasCrudas[1].concepto.trim(), 'CORREO, PORTES Y TELEGRAMAS');
+  assert.equal(filasCrudas[2].porcentaje, '4');
+  assert.equal(filasCrudas[2].tipo_cuenta, 'B');
+  assert.equal(filasCrudas[3].activo, 'N');
+});
+
+test('filasPucDesdeTabla: CSV sencillo de código y nombre (como antes)', () => {
+  const { filasCrudas } = filasPucDesdeTabla([['Código Cuenta', 'Nombre Cuenta'], ['51058', 'Comisiones']]);
+  assert.equal(filasCrudas[0].codigo, '51058');
+  assert.equal(filasCrudas[0].concepto, 'Comisiones');
+  assert.equal(filasCrudas[0].recibe_movimiento, '');
+});
+
+test('filasPucDesdeTabla: sin columna de código -> error claro', () => {
+  assert.match(filasPucDesdeTabla([['nombre'], ['x']]).error, /codigo/);
+});
+
+test('leerSiNoPuc / leerPorcentajePuc', () => {
+  assert.equal(leerSiNoPuc('S', false), true);
+  assert.equal(leerSiNoPuc(' n ', true), false);
+  assert.equal(leerSiNoPuc('', true), true);
+  assert.equal(leerPorcentajePuc('2,5'), 2.5);
+  assert.equal(leerPorcentajePuc('4%'), 4);
+  assert.equal(leerPorcentajePuc('0'), null);
+  assert.equal(leerPorcentajePuc(''), null);
+});

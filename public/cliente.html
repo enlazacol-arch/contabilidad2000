@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="/estadisticas.js"></script>
 <script src="/retenciones.js"></script>
+<script src="/puc-cliente.js"></script>
 <!-- Para leer un .xlsx subido en "PUC personalizado" (ver más abajo) --
      misma librería y versión que ya usan facturas.html/listado-retenciones.html
      para EXPORTAR xlsx; aquí se usa su lado de LECTURA (workbook.xlsx.load). -->
@@ -105,12 +106,40 @@
     background:#fff; color:var(--ink);
   }
   .puc-contador{ font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); white-space:nowrap; }
-  .puc-table-wrap{ max-height:480px; overflow-y:auto; border:1px solid var(--n-200); border-radius:var(--r-sm); }
+  .puc-table-wrap{ max-height:480px; overflow:auto; border:1px solid var(--n-200); border-radius:var(--r-sm); }
   .puc-table-wrap table.mini-facturas{ margin:0; }
   .puc-table-wrap thead th{ position:sticky; top:0; z-index:1; }
   .puc-th-ordenable{ cursor:pointer; user-select:none; }
   .puc-th-ordenable:hover{ color:var(--ink-soft); }
   .puc-flecha{ font-size:var(--t-12); }
+  .puc-opcion-iva{ display:flex; gap:10px; align-items:flex-start; font-size:var(--t-13); color:var(--ink-soft); max-width:80ch; margin:0 0 16px; cursor:pointer; }
+  .puc-opcion-iva input{ margin-top:3px; }
+  .puc-resumen{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; font-size:var(--t-13); color:var(--ink-soft); margin:0 0 12px; }
+  .puc-resumen strong{ font-family:var(--font-num); color:var(--ink); }
+  .puc-lote{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:var(--t-13); padding:8px 10px; margin-bottom:10px;
+    background:var(--n-50); border:1px solid var(--n-200); border-radius:var(--r-sm); }
+  .puc-lote span{ margin-right:auto; }
+  .puc-th-check{ width:32px; }
+  #tablaPuc td{ vertical-align:middle; }
+  #tablaPuc .puc-codigo{ font-family:var(--font-num); white-space:nowrap; }
+  #tablaPuc .puc-nivel-cuenta td, #tablaPuc .puc-nivel-grupo td, #tablaPuc .puc-nivel-clase td{ font-weight:700; color:var(--ink); }
+  #tablaPuc tr.puc-inactiva td{ color:var(--ink-faint); }
+  #tablaPuc tr.puc-inactiva .puc-nombre-texto{ text-decoration:line-through; }
+  .puc-aviso-obsoleta{ display:block; font-size:var(--t-12); color:var(--warn); margin-top:2px; }
+  .puc-editada{ font-size:var(--t-12); color:var(--ink-faint); margin-left:6px; }
+  .puc-estado{ background:none; border:1px solid var(--line); border-radius:999px; padding:2px 10px; font-size:var(--t-12); cursor:pointer; white-space:nowrap; color:var(--ok); }
+  .puc-estado.inactiva{ color:var(--ink-faint); }
+  .puc-estado:hover{ border-color:var(--ink-soft); }
+  .puc-acciones{ white-space:nowrap; text-align:right; }
+  .puc-acciones button{ background:none; border:none; cursor:pointer; color:var(--n-500); font-size:var(--t-12); padding:2px 4px; }
+  .puc-acciones button:hover{ color:var(--ink); }
+  .puc-acciones .btn-eliminar-puc:hover{ color:var(--err); }
+  .puc-editar-nombre{ width:100%; min-width:180px; font:inherit; font-size:var(--t-13); padding:4px 6px; border:1px solid var(--line); border-radius:var(--r-sm); }
+  .puc-editar-tarifa, .puc-input-tarifa{ width:90px; }
+  .puc-form-row input.puc-input-tarifa{ min-width:0; flex:0 0 90px; }
+  @media (max-width: 640px){
+    #tablaPuc th:nth-child(4), #tablaPuc td:nth-child(4), #tablaPuc th:nth-child(6), #tablaPuc td:nth-child(6){ display:none; }
+  }
 
   #loading, #notFound{
     font-family:var(--font-num); font-size:var(--t-13); color:var(--ink-soft);
@@ -242,50 +271,78 @@
 
     <div class="chart-card" id="pucCard">
       <div class="card-head">
-        <h2>PUC personalizado de este cliente</h2>
+        <h2>Plan de cuentas (PUC) de este cliente</h2>
       </div>
-      <p class="puc-intro">Si la contabilidad de este cliente se lleva en otro sistema (ej. Contaia) con sus propios códigos de cuenta, regístralos aquí -- al escanear una factura de este cliente, podrás elegir entre el código personalizado o el PUC estándar de Enlaza. Si no registras ninguno, este cliente sigue usando siempre el PUC estándar.</p>
+      <p class="puc-intro">Importa el plan de cuentas que exporta el programa contable del cliente (ej. Contai, Siigo). Al causar sus facturas, Enlaza propone las cuentas de este plan, con sus códigos y nombres, y en el asiento usa la cuenta de retención de la tarifa que corresponda. Sin plan propio, el cliente usa el PUC estándar.</p>
+
+      <label class="puc-opcion-iva">
+        <input type="checkbox" id="pucIvaMayorValor">
+        <span><strong>No responsable de IVA:</strong> el IVA de sus compras es mayor valor del gasto (no va a la 2408). Si el plan tiene cuentas «IVA …» junto a cada gasto, se usan esas.</span>
+      </label>
+
+      <div class="puc-resumen" id="pucResumen" style="display:none;"></div>
 
       <div class="puc-toolbar" id="pucToolbar" style="display:none;">
-        <input type="text" id="pucBuscar" class="puc-buscar" placeholder="Buscar por código o concepto...">
-        <select id="pucFiltroCategoria" class="puc-filtro-categoria"></select>
+        <input type="text" id="pucBuscar" class="puc-buscar" placeholder="Buscar por código o nombre..." aria-label="Buscar cuenta">
+        <select id="pucFiltroVista" class="puc-filtro-categoria" aria-label="Qué cuentas ver">
+          <option value="movimiento">Reciben movimiento</option>
+          <option value="auxiliares">Solo auxiliares (8 dígitos)</option>
+          <option value="obsoletas">Posibles obsoletas</option>
+          <option value="inactivas">Inactivas</option>
+          <option value="editadas">Agregadas o editadas en Enlaza</option>
+          <option value="todas">Todo el plan</option>
+        </select>
+        <select id="pucFiltroCategoria" class="puc-filtro-categoria" aria-label="Cuentas que se ofrecen para una categoría"></select>
         <span class="puc-contador" id="pucContador"></span>
+      </div>
+
+      <div class="puc-lote" id="pucLote" style="display:none;">
+        <span id="pucLoteTexto"></span>
+        <button class="btn btn--sm btn--danger" id="btnPucDesactivarSel" type="button">Desactivar</button>
+        <button class="btn btn--sm ghost" id="btnPucActivarSel" type="button">Activar</button>
+        <button class="btn btn--sm btn--tertiary" id="btnPucLimpiarSel" type="button">Quitar selección</button>
       </div>
 
       <div class="puc-table-wrap">
         <table class="mini-facturas" id="tablaPuc" style="display:none;">
           <thead>
             <tr>
-              <th class="puc-th-ordenable" data-campo="categoria_concepto">Categoría fiscal<span class="puc-flecha"></span></th>
+              <th class="puc-th-check"><input type="checkbox" id="pucSelTodas" aria-label="Seleccionar todas las cuentas visibles"></th>
               <th class="puc-th-ordenable" data-campo="codigo">Código<span class="puc-flecha"></span></th>
-              <th class="puc-th-ordenable" data-campo="concepto">Concepto<span class="puc-flecha"></span></th>
+              <th class="puc-th-ordenable" data-campo="concepto">Nombre<span class="puc-flecha"></span></th>
+              <th>Nivel</th>
+              <th title="Recibe movimiento">Mov.</th>
+              <th>Tarifa</th>
+              <th>Estado</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="tablaPucBody"></tbody>
         </table>
       </div>
-      <div id="pucEmpty" class="empty-note">Este cliente todavía usa el PUC estándar de Enlaza -- no tiene códigos personalizados propios.</div>
-      <div id="pucSinResultados" class="empty-note" style="display:none;">Ningún código coincide con tu búsqueda.</div>
+      <div id="pucEmpty" class="empty-note">Este cliente todavía usa el PUC estándar de Enlaza -- no tiene un plan de cuentas propio.</div>
+      <div id="pucSinResultados" class="empty-note" style="display:none;">Ninguna cuenta coincide con la búsqueda o el filtro.</div>
 
       <div class="puc-form">
-        <h3>Agregar un código a mano</h3>
+        <h3>Agregar una cuenta</h3>
         <div class="puc-form-row">
-          <select id="pucCategoria"></select>
-          <input type="text" id="pucCodigo" placeholder="Código (ej. 51058)">
-          <input type="text" id="pucConcepto" placeholder="Concepto (ej. Comisiones)">
+          <input type="text" id="pucCodigo" placeholder="Código (ej. 51451502)" inputmode="numeric" aria-label="Código de la cuenta">
+          <input type="text" id="pucConcepto" placeholder="Nombre (ej. MTTO MOTOBOMBA)" aria-label="Nombre de la cuenta">
+          <input type="text" id="pucPorcentaje" class="puc-input-tarifa" placeholder="Tarifa %" inputmode="decimal" aria-label="Tarifa de retención (solo cuentas de retención)">
+          <select id="pucCategoria" aria-label="Categoría fiscal"></select>
           <button class="btn primary" id="btnAgregarPuc" type="button">Agregar</button>
         </div>
         <div id="pucFormError" class="puc-error" style="display:none;"></div>
       </div>
 
       <div class="puc-import">
-        <h3>O leer varios de una vez</h3>
-        <p class="puc-intro">Un archivo CSV o Excel con columnas de <code>codigo</code> y <code>concepto</code> (la categoría fiscal es opcional, y los nombres de columna pueden variar -- ej. "cuenta", "nombre", "descripción"); o un PDF, foto o captura de pantalla de la lista tal como la ves en tu otro sistema -- en ese caso la lee la misma IA que lee las facturas.</p>
+        <h3>Importar el plan completo</h3>
+        <p class="puc-intro">El CSV o Excel que exporta su programa contable, con columnas de código y nombre; si trae «Recibe movimiento», «Activo» y «Porcentaje base» (como Contai), también se usan. Volver a importar actualiza el plan sin deshacer lo que ya ajustaste aquí. También sirve un PDF o una foto de la lista (la lee la IA).</p>
         <div class="puc-form-row">
           <input type="file" id="pucArchivo" accept=".csv,.xlsx,.pdf,image/*,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
           <button class="btn primary" id="btnImportarPuc" type="button">Leer y guardar archivo</button>
           <button class="btn ghost" id="btnPlantillaPuc" type="button">Descargar plantilla CSV</button>
+          <button class="btn btn--danger" id="btnBorrarPlanPuc" type="button" style="display:none;">Borrar el plan completo</button>
         </div>
         <div id="pucImportResultado" class="puc-import-resultado" style="display:none;"></div>
       </div>
@@ -388,7 +445,7 @@ async function cargarYRenderizar(){
   document.getElementById('clienteMeta').innerHTML = metaPartes.join('');
 
   // ---- PUC personalizado -- independiente de si ya tiene facturas ----
-  cargarPuc(cliente.id);
+  cargarPuc(cliente);
 
   // ---- Tarjetas ----
   const facturasCliente = allInvoices.filter(inv => inv.cliente_id === cliente.id);
@@ -450,71 +507,177 @@ async function cargarYRenderizar(){
   });
 }
 
-// ---------- PUC personalizado del cliente ----------
+// ---------- Plan de cuentas (PUC) propio del cliente ----------
+//
+// La lista completa se trae una vez y se filtra en memoria (un plan
+// exportado trae 700+ cuentas). La lógica de qué es obsoleta, qué cuenta
+// se ofrece para cada categoría, etc. vive en /puc-cliente.js, la misma
+// que usan Escanear, Carga masiva y el asiento del servidor.
 
 let clienteActualId = null;
 let pucListaCompleta = [];
 let pucOrden = { campo: 'codigo', dir: 'asc' };
+let pucSeleccion = new Set();
+let pucEditandoId = null;
+let pucVisibles = [];
+
+const PUC_NIVEL_LABELS = { clase: 'Clase', grupo: 'Grupo', cuenta: 'Cuenta', subcuenta: 'Subcuenta', auxiliar: 'Auxiliar' };
 
 function poblarSelectorCategoriasPuc(selectEl){
   const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
-  selectEl.innerHTML = Object.keys(labels).map((k) => `<option value="${k}">${escapeHtml(labels[k])}</option>`).join('');
+  selectEl.innerHTML = '<option value="">Categoría: según su grupo del PUC</option>' +
+    Object.keys(labels).map((k) => `<option value="${k}">Solo para: ${escapeHtml(labels[k])}</option>`).join('');
 }
 
 function poblarFiltroCategoriaPuc(selectEl){
   const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
-  selectEl.innerHTML = '<option value="">Todas las categorías</option>' +
-    Object.keys(labels).map((k) => `<option value="${k}">${escapeHtml(labels[k])}</option>`).join('');
+  selectEl.innerHTML = '<option value="">Cualquier categoría</option>' +
+    Object.keys(labels).map((k) => `<option value="${k}">Se ofrecen para: ${escapeHtml(labels[k])}</option>`).join('');
 }
 
 // Para que buscar "comisiones" encuentre "Comisión" -- ignora may/min y tildes.
 function normalizarTextoPuc(s){
-  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
-async function cargarPuc(clienteId){
-  clienteActualId = clienteId;
+function urlPuc(sufijo){
+  return `/api/clients/${encodeURIComponent(clienteActualId)}/puc${sufijo || ''}`;
+}
+
+async function cargarPuc(cliente){
+  clienteActualId = cliente.id;
   poblarSelectorCategoriasPuc(document.getElementById('pucCategoria'));
   poblarFiltroCategoriaPuc(document.getElementById('pucFiltroCategoria'));
+  const opcionIva = document.getElementById('pucIvaMayorValor');
+  opcionIva.checked = !!cliente.iva_mayor_valor_gasto;
+  opcionIva.onchange = async () => {
+    const valor = opcionIva.checked;
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(cliente.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iva_mayor_valor_gasto: valor }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo guardar.');
+      Aviso.mostrar(valor ? 'Listo: el IVA de sus compras irá al gasto.' : 'Listo: el IVA de sus compras irá a IVA descontable (2408).');
+    } catch (err) {
+      opcionIva.checked = !valor;
+      Aviso.mostrar('No se pudo guardar: ' + err.message, { tipo: 'error' });
+    }
+  };
+  await recargarListaPuc();
+}
+
+async function recargarListaPuc(){
   try {
-    const res = await fetch(`/api/clients/${encodeURIComponent(clienteId)}/puc`);
+    const res = await fetch(urlPuc());
     if (!res.ok) return;
     pucListaCompleta = await res.json();
+    const ids = new Set(pucListaCompleta.map((c) => c.id));
+    pucSeleccion = new Set([...pucSeleccion].filter((id) => ids.has(id)));
     aplicarFiltrosPuc();
   } catch (e) { /* si falla, el cliente sigue viendo el estado vacío -- no es bloqueante */ }
 }
 
-// Filtra (búsqueda + categoría) y ordena pucListaCompleta en memoria --
-// con cuentas en la lista no tiene sentido pedirle de nuevo al servidor
-// cada vez que el contador teclea una letra.
+// Cuentas que se pueden usar al causar y que parecen de conceptos que ya
+// no existen (inflación, corrección monetaria, CREE).
+function pucObsoletasActivas(){
+  return pucListaCompleta.filter((c) => c.obsoleta && c.activo && c.recibe_movimiento);
+}
+
+function renderResumenPuc(){
+  const el = document.getElementById('pucResumen');
+  if (pucListaCompleta.length === 0) { el.style.display = 'none'; return; }
+  const usables = pucListaCompleta.filter((c) => c.activo && c.recibe_movimiento).length;
+  const inactivas = pucListaCompleta.filter((c) => !c.activo).length;
+  const obsoletas = pucObsoletasActivas();
+  el.style.display = 'flex';
+  el.innerHTML = `<span><strong>${pucListaCompleta.length}</strong> cuentas</span>
+    <span><strong>${usables}</strong> activas que reciben movimiento</span>
+    ${inactivas ? `<span><strong>${inactivas}</strong> inactivas</span>` : ''}
+    ${obsoletas.length ? `<span class="badge badge--warn">${obsoletas.length} posibles obsoletas activas</span>
+      <button class="btn btn--sm ghost" id="btnPucVerObsoletas" type="button">Revisarlas</button>
+      <button class="btn btn--sm btn--danger" id="btnPucDesactivarObsoletas" type="button">Desactivar las ${obsoletas.length}</button>` : ''}`;
+  const ver = document.getElementById('btnPucVerObsoletas');
+  if (ver) ver.addEventListener('click', () => { document.getElementById('pucFiltroVista').value = 'obsoletas'; aplicarFiltrosPuc(); });
+  const desactivar = document.getElementById('btnPucDesactivarObsoletas');
+  if (desactivar) desactivar.addEventListener('click', async () => {
+    const lista = pucObsoletasActivas();
+    const ok = await Aviso.confirmar({
+      titulo: 'Desactivar cuentas obsoletas',
+      mensaje: `Se desactivarán ${lista.length} cuentas de ajustes por inflación, corrección monetaria y CREE. No se borran: dejan de ofrecerse al causar y las puedes reactivar cuando quieras.`,
+      textoConfirmar: `Desactivar ${lista.length}`,
+    });
+    if (ok) cambiarEstadoPuc(lista.map((c) => c.id), false);
+  });
+  document.getElementById('btnBorrarPlanPuc').style.display = '';
+}
+
+// Filtra (búsqueda + vista + categoría) y ordena en memoria.
 function aplicarFiltrosPuc(){
   const termino = normalizarTextoPuc(document.getElementById('pucBuscar').value.trim());
+  const vista = document.getElementById('pucFiltroVista').value;
   const categoria = document.getElementById('pucFiltroCategoria').value;
-  const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
+  const deCategoria = categoria && typeof cuentasClienteParaCategoria === 'function'
+    ? new Set(cuentasClienteParaCategoria(pucListaCompleta, categoria).map((c) => c.codigo))
+    : null;
 
-  let filtrada = pucListaCompleta.filter((item) => {
-    if (categoria && item.categoria_concepto !== categoria) return false;
+  const filtrada = pucListaCompleta.filter((c) => {
+    if (vista === 'movimiento' && !c.recibe_movimiento) return false;
+    if (vista === 'auxiliares' && c.nivel !== 'auxiliar') return false;
+    if (vista === 'obsoletas' && !c.obsoleta) return false;
+    if (vista === 'inactivas' && c.activo) return false;
+    if (vista === 'editadas' && !c.editado) return false;
+    if (deCategoria && !deCategoria.has(c.codigo)) return false;
     if (!termino) return true;
-    return normalizarTextoPuc(item.codigo).includes(termino) || normalizarTextoPuc(item.concepto).includes(termino);
+    return normalizarTextoPuc(c.codigo).includes(termino) || normalizarTextoPuc(c.concepto).includes(termino);
   });
 
   const { campo, dir } = pucOrden;
   filtrada.sort((a, b) => {
-    const va = normalizarTextoPuc(campo === 'categoria_concepto' ? (labels[a.categoria_concepto] || a.categoria_concepto) : a[campo]);
-    const vb = normalizarTextoPuc(campo === 'categoria_concepto' ? (labels[b.categoria_concepto] || b.categoria_concepto) : b[campo]);
+    const va = normalizarTextoPuc(a[campo]);
+    const vb = normalizarTextoPuc(b[campo]);
     if (va < vb) return dir === 'asc' ? -1 : 1;
     if (va > vb) return dir === 'asc' ? 1 : -1;
     return 0;
   });
 
+  renderResumenPuc();
   renderPuc(filtrada);
 }
 
 function actualizarFlechasOrdenPuc(){
   document.querySelectorAll('#tablaPuc .puc-th-ordenable').forEach((th) => {
     const flecha = th.querySelector('.puc-flecha');
-    flecha.textContent = th.dataset.campo === pucOrden.campo ? (pucOrden.dir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
+    flecha.textContent = th.dataset.campo === pucOrden.campo ? (pucOrden.dir === 'asc' ? ' ▲' : ' ▼') : '';
   });
+}
+
+function filaPucHtml(c){
+  const tarifa = c.porcentaje ? `${String(c.porcentaje).replace('.', ',')}%` : '';
+  const clases = [`puc-nivel-${c.nivel}`, c.activo ? '' : 'puc-inactiva'].join(' ');
+  if (c.id === pucEditandoId) {
+    return `<tr class="${clases}" data-id="${escapeHtml(c.id)}">
+      <td></td>
+      <td class="puc-codigo">${escapeHtml(c.codigo)}</td>
+      <td><input type="text" class="puc-editar-nombre" value="${escapeHtml(c.concepto)}" aria-label="Nombre de la cuenta ${escapeHtml(c.codigo)}"></td>
+      <td>${PUC_NIVEL_LABELS[c.nivel] || ''}</td>
+      <td><input type="checkbox" class="puc-editar-mov" ${c.recibe_movimiento ? 'checked' : ''} aria-label="Recibe movimiento"></td>
+      <td><input type="text" class="puc-editar-tarifa puc-editar-nombre" value="${c.porcentaje || ''}" inputmode="decimal" aria-label="Tarifa %"></td>
+      <td></td>
+      <td class="puc-acciones"><button class="puc-guardar" type="button">Guardar</button><button class="puc-cancelar" type="button">Cancelar</button></td>
+    </tr>`;
+  }
+  return `<tr class="${clases}" data-id="${escapeHtml(c.id)}">
+    <td><input type="checkbox" class="puc-sel" ${pucSeleccion.has(c.id) ? 'checked' : ''} aria-label="Seleccionar ${escapeHtml(c.codigo)}"></td>
+    <td class="puc-codigo">${escapeHtml(c.codigo)}</td>
+    <td><span class="puc-nombre-texto">${escapeHtml(c.concepto)}</span>${c.editado ? '<span class="puc-editada" title="Agregada o ajustada en Enlaza">editada</span>' : ''}
+      ${c.obsoleta ? `<span class="puc-aviso-obsoleta">Posible obsoleta: ${escapeHtml(c.obsoleta)}</span>` : ''}</td>
+    <td>${PUC_NIVEL_LABELS[c.nivel] || ''}</td>
+    <td>${c.recibe_movimiento ? 'Sí' : 'No'}</td>
+    <td class="puc-codigo">${tarifa}</td>
+    <td><button class="puc-estado ${c.activo ? '' : 'inactiva'}" type="button" title="${c.activo ? 'Clic para desactivar' : 'Clic para activar'}">${c.activo ? 'Activa' : 'Inactiva'}</button></td>
+    <td class="puc-acciones"><button class="puc-editar" type="button">Editar</button><button class="btn-eliminar-puc" type="button">Eliminar</button></td>
+  </tr>`;
 }
 
 function renderPuc(lista){
@@ -524,20 +687,24 @@ function renderPuc(lista){
   const empty = document.getElementById('pucEmpty');
   const sinResultados = document.getElementById('pucSinResultados');
   const contador = document.getElementById('pucContador');
+  pucVisibles = lista;
 
-  // Caso base: el cliente no tiene NINGÚN código propio todavía (nada que
-  // buscar ni filtrar) -- se distingue de "el filtro no encontró nada".
+  // Caso base: el cliente no tiene ninguna cuenta propia todavía -- se
+  // distingue de "el filtro no encontró nada".
   if (pucListaCompleta.length === 0) {
     toolbar.style.display = 'none';
     tabla.style.display = 'none';
     sinResultados.style.display = 'none';
     empty.style.display = 'block';
+    document.getElementById('btnBorrarPlanPuc').style.display = 'none';
+    renderLotePuc();
     return;
   }
 
   toolbar.style.display = 'flex';
   empty.style.display = 'none';
   actualizarFlechasOrdenPuc();
+  renderLotePuc();
 
   if (lista.length === 0) {
     tabla.style.display = 'none';
@@ -548,33 +715,65 @@ function renderPuc(lista){
 
   sinResultados.style.display = 'none';
   tabla.style.display = 'table';
-  contador.textContent = lista.length === pucListaCompleta.length
-    ? `${pucListaCompleta.length} cuenta${pucListaCompleta.length === 1 ? '' : 's'}`
-    : `${lista.length} de ${pucListaCompleta.length} cuentas`;
+  contador.textContent = `${lista.length} de ${pucListaCompleta.length} cuentas`;
+  tbody.innerHTML = lista.map(filaPucHtml).join('');
+  const selTodas = document.getElementById('pucSelTodas');
+  selTodas.checked = lista.length > 0 && lista.every((c) => pucSeleccion.has(c.id));
 
-  const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
-  tbody.innerHTML = lista.map((item) => `
-    <tr>
-      <td>${escapeHtml(labels[item.categoria_concepto] || item.categoria_concepto)}</td>
-      <td class="date">${escapeHtml(item.codigo)}</td>
-      <td>${escapeHtml(item.concepto)}</td>
-      <td><button class="btn-eliminar-puc" data-id="${escapeHtml(item.id)}" type="button">Eliminar</button></td>
-    </tr>
-  `).join('');
-  tbody.querySelectorAll('.btn-eliminar-puc').forEach((btn) => {
-    btn.addEventListener('click', () => eliminarPuc(btn.dataset.id));
-  });
+  const editando = tbody.querySelector('.puc-editar-nombre');
+  if (editando) { editando.focus(); editando.select(); }
 }
 
-async function recargarListaPuc(){
-  const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc`);
-  if (res.ok) {
-    pucListaCompleta = await res.json();
+function renderLotePuc(){
+  const lote = document.getElementById('pucLote');
+  if (pucSeleccion.size === 0) { lote.style.display = 'none'; return; }
+  lote.style.display = 'flex';
+  document.getElementById('pucLoteTexto').textContent = `${pucSeleccion.size} cuenta${pucSeleccion.size === 1 ? '' : 's'} seleccionada${pucSeleccion.size === 1 ? '' : 's'}`;
+}
+
+async function cambiarEstadoPuc(ids, activo){
+  try {
+    const res = await fetch(urlPuc('/estado'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, activo }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+    pucSeleccion.clear();
+    await recargarListaPuc();
+    Aviso.mostrar(`${data.actualizadas} cuenta${data.actualizadas === 1 ? '' : 's'} ${activo ? 'activada' : 'desactivada'}${data.actualizadas === 1 ? '' : 's'}.`);
+  } catch (err) {
+    Aviso.mostrar('No se pudo cambiar el estado: ' + err.message, { tipo: 'error' });
+  }
+}
+
+async function guardarEdicionPuc(tr){
+  const id = tr.dataset.id;
+  const concepto = tr.querySelector('.puc-editar-nombre').value.trim();
+  if (!concepto) { Aviso.mostrar('El nombre de la cuenta no puede quedar vacío.', { tipo: 'error' }); return; }
+  try {
+    const res = await fetch(urlPuc('/' + encodeURIComponent(id)), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        concepto,
+        recibe_movimiento: tr.querySelector('.puc-editar-mov').checked,
+        porcentaje: tr.querySelector('.puc-editar-tarifa').value.trim(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+    const i = pucListaCompleta.findIndex((c) => c.id === id);
+    if (i !== -1) pucListaCompleta[i] = data;
+    pucEditandoId = null;
     aplicarFiltrosPuc();
+    Aviso.mostrar('Cuenta actualizada.');
+  } catch (err) {
+    Aviso.mostrar('No se pudo guardar: ' + err.message, { tipo: 'error' });
   }
 }
 
 document.getElementById('pucBuscar').addEventListener('input', aplicarFiltrosPuc);
+document.getElementById('pucFiltroVista').addEventListener('change', aplicarFiltrosPuc);
 document.getElementById('pucFiltroCategoria').addEventListener('change', aplicarFiltrosPuc);
 document.querySelectorAll('#tablaPuc .puc-th-ordenable').forEach((th) => {
   th.addEventListener('click', () => {
@@ -588,19 +787,70 @@ document.querySelectorAll('#tablaPuc .puc-th-ordenable').forEach((th) => {
   });
 });
 
+// Un solo manejador para toda la tabla (700+ filas).
+document.getElementById('tablaPucBody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  const cuenta = pucListaCompleta.find((c) => c.id === id);
+  if (e.target.classList.contains('puc-sel')) {
+    if (e.target.checked) pucSeleccion.add(id); else pucSeleccion.delete(id);
+    renderLotePuc();
+  } else if (e.target.classList.contains('puc-estado') && cuenta) {
+    cambiarEstadoPuc([id], !cuenta.activo);
+  } else if (e.target.classList.contains('puc-editar')) {
+    pucEditandoId = id;
+    renderPuc(pucVisibles);
+  } else if (e.target.classList.contains('puc-cancelar')) {
+    pucEditandoId = null;
+    renderPuc(pucVisibles);
+  } else if (e.target.classList.contains('puc-guardar')) {
+    guardarEdicionPuc(tr);
+  } else if (e.target.classList.contains('btn-eliminar-puc')) {
+    eliminarPuc(id);
+  }
+});
+document.getElementById('tablaPucBody').addEventListener('keydown', (e) => {
+  if (!e.target.classList.contains('puc-editar-nombre')) return;
+  if (e.key === 'Enter') guardarEdicionPuc(e.target.closest('tr'));
+  if (e.key === 'Escape') { pucEditandoId = null; renderPuc(pucVisibles); }
+});
+document.getElementById('pucSelTodas').addEventListener('change', (e) => {
+  pucVisibles.forEach((c) => { if (e.target.checked) pucSeleccion.add(c.id); else pucSeleccion.delete(c.id); });
+  renderPuc(pucVisibles);
+});
+document.getElementById('btnPucDesactivarSel').addEventListener('click', () => cambiarEstadoPuc([...pucSeleccion], false));
+document.getElementById('btnPucActivarSel').addEventListener('click', () => cambiarEstadoPuc([...pucSeleccion], true));
+document.getElementById('btnPucLimpiarSel').addEventListener('click', () => { pucSeleccion.clear(); renderPuc(pucVisibles); });
+
 async function eliminarPuc(pucId){
   if (!clienteActualId) return;
-  const ok = await Aviso.confirmarEliminar('¿Eliminar este código PUC personalizado? Las facturas que ya lo usaron no cambian -- solo deja de sugerirse en las próximas.', { titulo: 'Eliminar código PUC' });
+  const ok = await Aviso.confirmarEliminar('¿Eliminar esta cuenta del plan del cliente? Las facturas que ya la usaron no cambian. Si solo no se usa, mejor desactívala.', { titulo: 'Eliminar cuenta' });
   if (!ok) return;
   try {
-    const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/${encodeURIComponent(pucId)}`, { method: 'DELETE' });
+    const res = await fetch(urlPuc('/' + encodeURIComponent(pucId)), { method: 'DELETE' });
     if (!res.ok) throw new Error('No se pudo eliminar.');
     await recargarListaPuc();
-    Aviso.mostrar('Código PUC eliminado.');
+    Aviso.mostrar('Cuenta eliminada.');
   } catch (err) {
     Aviso.mostrar('No se pudo eliminar: ' + err.message, { tipo: 'error' });
   }
 }
+
+document.getElementById('btnBorrarPlanPuc').addEventListener('click', async () => {
+  const ok = await Aviso.confirmarEliminar(`¿Borrar las ${pucListaCompleta.length} cuentas del plan de este cliente? Las facturas ya causadas no cambian. Sirve para volver a importar el plan desde cero; los ajustes hechos aquí se pierden.`, { titulo: 'Borrar el plan completo', textoConfirmar: 'Borrar el plan' });
+  if (!ok) return;
+  try {
+    const res = await fetch(urlPuc('?confirmar=1'), { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo borrar.');
+    pucSeleccion.clear();
+    await recargarListaPuc();
+    Aviso.mostrar(`Plan borrado (${data.borradas} cuentas).`);
+  } catch (err) {
+    Aviso.mostrar('No se pudo borrar: ' + err.message, { tipo: 'error' });
+  }
+});
 
 document.getElementById('btnAgregarPuc').addEventListener('click', async () => {
   const errorEl = document.getElementById('pucFormError');
@@ -608,48 +858,47 @@ document.getElementById('btnAgregarPuc').addEventListener('click', async () => {
   const categoria = document.getElementById('pucCategoria').value;
   const codigoEl = document.getElementById('pucCodigo');
   const conceptoEl = document.getElementById('pucConcepto');
-  const codigo = codigoEl.value.trim();
+  const porcentajeEl = document.getElementById('pucPorcentaje');
+  const codigo = codigoEl.value.replace(/[.\s]/g, '').trim();
   const concepto = conceptoEl.value.trim();
   if (!codigo || !concepto) {
-    errorEl.textContent = 'Código y concepto son obligatorios.';
+    errorEl.textContent = 'Código y nombre son obligatorios.';
     errorEl.style.display = 'block';
     return;
   }
-  const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc`, {
+  const res = await fetch(urlPuc(), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ categoria_concepto: categoria, codigo, concepto }),
+    body: JSON.stringify({ categoria_concepto: categoria, codigo, concepto, porcentaje: porcentajeEl.value.trim() }),
   });
   const data = await res.json();
   if (!res.ok) {
-    errorEl.textContent = data.error || 'No se pudo agregar el código.';
+    errorEl.textContent = data.error || 'No se pudo agregar la cuenta.';
     errorEl.style.display = 'block';
     return;
   }
   codigoEl.value = '';
   conceptoEl.value = '';
+  porcentajeEl.value = '';
   recargarListaPuc();
-  Aviso.mostrar('Código PUC agregado.');
+  Aviso.mostrar('Cuenta agregada.');
 });
 
 document.getElementById('btnPlantillaPuc').addEventListener('click', () => {
-  const contenido = 'categoria_fiscal,codigo,concepto\nhonorarios_natural,51058,Comisiones\n';
+  const contenido = 'Codigo,Concepto,Recibe Movimiento,Activo,Porcentaje Base\n'
+    + '513507,VIGILANCIA,S,S,0\n51451501,EQUIPO DE BOMBEO,S,S,0\n23652502,RETEFTE SERVICIOS 4%,S,S,4\n';
   const blob = new Blob([contenido], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'plantilla-puc-personalizado.csv';
+  a.download = 'plantilla-puc-cliente.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 });
 
-// ---- Lectura de "varios códigos de una vez": CSV/Excel se leen tal
-// cual (exactos, sin IA); PDF/foto pasan por la misma IA que lee
-// facturas, porque un documento así no tiene columnas que parsear a
-// mano. Las tres rutas terminan en el mismo mensaje de resultado --
-// tanto el bloque de detalle como un aviso tipo toast, para que nunca
-// quede "mudo" si algo sale mal o si todo salió bien.
+// ---- Importar: CSV/Excel se leen tal cual (exactos, sin IA); PDF/foto
+// pasan por la misma IA que lee facturas.
 
 function extensionDeArchivoPuc(nombre){
   const m = /\.([a-z0-9]+)$/i.exec(nombre || '');
@@ -665,11 +914,20 @@ function leerArchivoComoBase64Puc(file){
   });
 }
 
+// Los programas contables suelen exportar el CSV en Latin-1 (Windows), no
+// en UTF-8: leído como UTF-8, "DEPRECIACIÓN" llega como "DEPRECIACI�N".
+// Se intenta UTF-8 estricto y, si el archivo no lo es, Windows-1252.
+async function leerCsvComoTextoPuc(file){
+  const bytes = await file.arrayBuffer();
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (e) {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
 // Convierte la primera hoja de un .xlsx a texto CSV usando ExcelJS (ya
-// cargado en el <head>, misma librería que usan facturas.html y
-// listado-retenciones.html para EXPORTAR) -- así reutilizamos el mismo
-// parser/validación de columnas de /puc/importar en vez de duplicarlo
-// para Excel.
+// cargado en el <head>) -- así se reutiliza el mismo importador.
 async function leerXlsxComoCsvPuc(file){
   const buffer = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
@@ -682,7 +940,7 @@ async function leerXlsxComoCsvPuc(file){
     filas.push(valores.map((v) => {
       if (v === null || v === undefined) return '';
       const texto = (typeof v === 'object' && v.text !== undefined) ? v.text : String(v);
-      return /[",\n]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"' : texto;
+      return /[",;\n]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"' : texto;
     }).join(','));
   });
   return filas.join('\n');
@@ -691,12 +949,14 @@ async function leerXlsxComoCsvPuc(file){
 function mostrarResultadoImportacionPuc(data){
   const resultadoEl = document.getElementById('pucImportResultado');
   resultadoEl.style.display = 'block';
-  let html = `${data.importados} código(s) leído(s) y guardado(s) correctamente.`;
+  let html = `${data.importados} cuenta(s) leída(s) y guardada(s).`;
+  if (data.recibenMovimiento !== undefined) html += ` ${data.recibenMovimiento} activas que reciben movimiento.`;
+  if (data.posiblesObsoletas) html += ` ${data.posiblesObsoletas} parecen obsoletas (ajustes por inflación, corrección monetaria, CREE): revísalas arriba.`;
   if (data.errores && data.errores.length) {
     html += '<br>' + data.errores.map((e) => `<span class="puc-fila-error">Fila ${e.fila}: ${escapeHtml(e.motivo)}</span>`).join('<br>');
   }
   resultadoEl.innerHTML = html;
-  Aviso.mostrar(`${data.importados} código(s) PUC leído(s) y guardado(s).`);
+  Aviso.mostrar(`${data.importados} cuenta(s) del PUC leída(s) y guardada(s).`);
 }
 
 document.getElementById('btnImportarPuc').addEventListener('click', async () => {
@@ -723,9 +983,9 @@ document.getElementById('btnImportarPuc').addEventListener('click', async () => 
 
   try {
     let data;
-    if (ext === 'csv' || file.type === 'text/csv') {
-      const texto = await file.text();
-      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/importar`, {
+    if (ext === 'csv' || ext === 'txt' || file.type === 'text/csv') {
+      const texto = await leerCsvComoTextoPuc(file);
+      const res = await fetch(urlPuc('/importar'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csvTexto: texto }),
       });
@@ -735,7 +995,7 @@ document.getElementById('btnImportarPuc').addEventListener('click', async () => 
       if (typeof ExcelJS === 'undefined') throw new Error('No se pudo cargar el lector de Excel -- revisa tu conexión e intenta de nuevo.');
       const csvTexto = await leerXlsxComoCsvPuc(file);
       if (!csvTexto.trim()) throw new Error('El archivo de Excel no parece tener datos en la primera hoja.');
-      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/importar`, {
+      const res = await fetch(urlPuc('/importar'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csvTexto }),
       });
@@ -743,7 +1003,7 @@ document.getElementById('btnImportarPuc').addEventListener('click', async () => 
       if (!res.ok) throw new Error(data.error || 'No se pudo leer el archivo.');
     } else if (esPdf || esImagen) {
       const base64 = await leerArchivoComoBase64Puc(file);
-      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/leer-ia`, {
+      const res = await fetch(urlPuc('/leer-ia'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base64, mediaType: file.type || (esPdf ? 'application/pdf' : 'image/jpeg'), isPdf: esPdf }),
       });
