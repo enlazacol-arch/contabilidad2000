@@ -485,3 +485,19 @@ test('servicios públicos: la subcuenta sale del servicio que dice el documento'
   assert.equal(sub('AGUAS DE MANIZALES', 'Acueducto y alcantarillado'), '513525');
   assert.equal(sub('VANTI S.A.', 'Consumo de gas natural'), '513555');
 });
+
+test('AIU: la línea "AIU" mal clasificada como servicios y AIU repetidos en las líneas (Coraza, segunda lectura)', () => {
+  // Misma factura VP18187, leída de otra forma por la IA: servicios sin
+  // AIU, AIU dentro de cada línea y la línea AIU como "servicios".
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 23981410, valor_iva: 455646, fecha_factura: '14/07/2026', nit_cc: '900434727',
+    items: [
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 24 HORAS', subtotal: 15434045, categoria_concepto: 'vigilancia_aseo', aiu: 1543405 },
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 08 HORAS NOCTURNAS', subtotal: 6147224, categoria_concepto: 'vigilancia_aseo', aiu: 614722 },
+      { descripcion: 'AIU 10 Art 46 Ley 1607 de 2012', subtotal: 2398141, categoria_concepto: 'servicios', aiu: '' },
+    ],
+  };
+  const s = sugerirConItems(data);
+  assert.equal(data.items[2].categoria_concepto, 'vigilancia_aseo');
+  assert.equal(s.bajo, 47963); // antes: 139.089
+});

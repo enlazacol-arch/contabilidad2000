@@ -890,6 +890,36 @@ function consolidarAiuEnItems(items, data) {
   if (!Array.isArray(items) || items.length === 0) return items;
   const datos = data || {};
 
+  // 0) La línea que ES el AIU pertenece al servicio de vigilancia/aseo de
+  //    la misma factura, aunque la IA la haya clasificado como
+  //    "servicios" (pasó con Coraza: se le cobraba 4% de servicios).
+  //    Y si hay una línea explícita de AIU, ella es el AIU completo: los
+  //    AIU que la IA puso dentro de las otras líneas se descartan para no
+  //    contarlo dos veces.
+  const categoriaAiu = (items.find((it) => esCategoriaBaseAiu(it.categoria_concepto) && !ES_LINEA_AIU.test(String(it.descripcion || ''))) || {}).categoria_concepto
+    || (esCategoriaBaseAiu(datos.categoria_concepto) ? String(datos.categoria_concepto).toLowerCase() : '');
+  if (categoriaAiu) {
+    const hermano = items.find((it) => it.categoria_concepto === categoriaAiu && !ES_LINEA_AIU.test(String(it.descripcion || '')));
+    let hayLineaAiu = false;
+    items.forEach((it) => {
+      if (!ES_LINEA_AIU.test(String(it.descripcion || ''))) return;
+      hayLineaAiu = true;
+      if (it.categoria_concepto !== categoriaAiu) {
+        it.categoria_concepto = categoriaAiu;
+        if (hermano && hermano.subcuenta_gasto) it.subcuenta_gasto = hermano.subcuenta_gasto;
+        const config = TARIFAS_RETENCION[categoriaAiu];
+        if (config) it.tarifa_retencion = config.tarifaBaja;
+        it.aiu = '';
+      }
+    });
+    if (hayLineaAiu) {
+      items.forEach((it) => {
+        if (it.categoria_concepto === categoriaAiu && !ES_LINEA_AIU.test(String(it.descripcion || ''))) it.aiu = '';
+      });
+      autoCompletarAiuDesdeDescripcion(items);
+    }
+  }
+
   // 1) AIU imposible
   items.forEach((it) => {
     if (!esCategoriaBaseAiu(it.categoria_concepto) || ES_LINEA_AIU.test(String(it.descripcion || ''))) return;
