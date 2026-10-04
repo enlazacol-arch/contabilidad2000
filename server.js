@@ -2243,17 +2243,29 @@ app.get('/api/articulo-383-por-nit', requireAuth, async (req, res) => {
 app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT DISTINCT ON (i.nit_cc, fi.categoria_concepto) i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto, i.cliente_id
+      `SELECT DISTINCT ON (i.cliente_id, i.nit_cc, fi.categoria_concepto) i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto, i.cliente_id, i.saved_at
          FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
         WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
           AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
-        ORDER BY i.nit_cc, fi.categoria_concepto, i.saved_at DESC`,
+        ORDER BY i.cliente_id, i.nit_cc, fi.categoria_concepto, i.saved_at DESC`,
       [req.firmaId]
     );
+    // Dos claves: "NIT|categoria" (lo último usado con ese proveedor, en
+    // cualquier cliente) y "clienteId|NIT|categoria" (con ese cliente:
+    // cada cliente puede tener su propio plan de cuentas).
     const mapa = {};
+    const fechaGeneral = {};
     rows
       .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
-      .forEach((r) => { mapa[`${normalizarNit(r.nit_cc)}|${String(r.categoria_concepto).toLowerCase()}`] = r.subcuenta_gasto; });
+      .forEach((r) => {
+        const clave = `${normalizarNit(r.nit_cc)}|${String(r.categoria_concepto).toLowerCase()}`;
+        if (r.cliente_id) mapa[`${r.cliente_id}|${clave}`] = r.subcuenta_gasto;
+        const fecha = r.saved_at ? new Date(r.saved_at).getTime() : 0;
+        if (!(clave in fechaGeneral) || fecha > fechaGeneral[clave]) {
+          fechaGeneral[clave] = fecha;
+          mapa[clave] = r.subcuenta_gasto;
+        }
+      });
     res.json(mapa);
   } catch (err) {
     console.error('Error leyendo subcuentas aprendidas:', err);

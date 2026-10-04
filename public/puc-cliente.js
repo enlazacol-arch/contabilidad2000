@@ -205,6 +205,30 @@ function cuentaIvaGastoCliente(pucCliente, codigoGasto) {
   return null;
 }
 
+// La cuenta que se propone al causar para un cliente. `sugerida` es lo
+// que Enlaza propondría sin plan propio (lo aprendido con ese proveedor,
+// o la subcuenta estándar de la categoría):
+// - sin plan propio, o si la sugerida ya es una cuenta usable del plan
+//   del cliente -> la sugerida;
+// - si no, el auxiliar del cliente más parecido (elegirCuentaCliente);
+// - si ninguno se parece, la sugerida (el contador elige en la lista).
+function subcuentaParaCliente(pucCliente, categoria, sugerida, texto) {
+  const lista = Array.isArray(pucCliente) ? pucCliente : [];
+  const sug = String(sugerida || '');
+  if (lista.length === 0) return sug;
+  const delPlan = lista.find((c) => String(c.codigo) === sug);
+  if (delPlan && delPlan.activo !== false && delPlan.recibe_movimiento !== false) return sug;
+  // Una cuenta del plan que el contador desactivó (o que no recibe
+  // movimiento) nunca se propone, aunque se haya usado antes.
+  return elegirCuentaCliente(lista, categoria, sug, texto) || (delPlan ? '' : sug);
+}
+
+// ¿El código está en el plan de cuentas del cliente? (para marcarlo en
+// pantalla como cuenta del cliente y no del PUC estándar).
+function esCuentaDelCliente(pucCliente, codigo) {
+  return (Array.isArray(pucCliente) ? pucCliente : []).some((c) => String(c.codigo) === String(codigo || ''));
+}
+
 // ---------- Lectura del archivo del plan de cuentas ----------
 
 // Encabezados aceptados (sin tildes ni mayúsculas). Solo código y nombre
@@ -283,6 +307,8 @@ if (typeof module !== 'undefined' && module.exports) {
     cuentaRetencionCliente,
     cuentaIvaGastoCliente,
     nombreCuentaCliente,
+    subcuentaParaCliente,
+    esCuentaDelCliente,
     leerSiNoPuc,
     leerPorcentajePuc,
     filasPucDesdeTabla,

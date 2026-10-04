@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <script src="/retenciones.js"></script>
+<script src="/puc-cliente.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -845,6 +846,25 @@ async function cargarPucClienteYRefrescar(clienteId){
   if (typeof renderItemsPanel === 'function' && currentItems && currentItems.length > 0) {
     renderItemsPanel();
   }
+}
+
+// Lleva la subcuenta de cada ítem al plan de cuentas del cliente (ej.
+// 514510 estándar -> 51451006 MANTENIMIENTO PUERTAS del cliente), una vez
+// por cliente. Lo que el contador eligió a mano en un ítem no se toca, y
+// si se cambia a un cliente sin plan propio, el ítem vuelve a la
+// subcuenta estándar que tenía.
+function ajustarItemsAlPucCliente(items, clienteId, textoFactura){
+  const puc = pucPersonalizadoPorCliente[clienteId];
+  if (!clienteId || !puc || typeof subcuentaParaCliente !== 'function') return;
+  const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+  const nit = nitInput ? nitInput.value : '';
+  (items || []).forEach((it) => {
+    if (it._subcuentaManual || it._pucCliente === clienteId) return;
+    if (it._subcuentaEstandar === undefined) it._subcuentaEstandar = it.subcuenta_gasto || '';
+    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(nit, it.categoria_concepto, clienteId) : '';
+    it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${textoFactura || ''}`);
+    it._pucCliente = clienteId;
+  });
 }
 
 // Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
@@ -2048,8 +2068,12 @@ function renderResult(data){
       function poblarSubcuentas(categoria){
         subSelect.innerHTML = '';
         const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
-        const personalizados = (pucPersonalizadoPorCliente[currentClienteId] || [])
-          .filter((p) => p.categoria_concepto === categoria);
+        // Cuentas del plan propio del cliente que sirven para esta
+        // categoría (por su grupo del PUC, ver /puc-cliente.js).
+        const pucDelCliente = pucPersonalizadoPorCliente[currentClienteId] || [];
+        const personalizados = (typeof cuentasClienteParaCategoria === 'function')
+          ? cuentasClienteParaCategoria(pucDelCliente, categoria)
+          : pucDelCliente.filter((p) => p.categoria_concepto === categoria);
 
         // "Otro" sin ningún PUC personalizado todavía para este cliente:
         // no hay nada razonable que preseleccionar (ni un estándar, ni
@@ -2092,7 +2116,7 @@ function renderResult(data){
 
         const nombreCliente = (myClients.find((c) => c.id === currentClienteId) || {}).nombre || 'este cliente';
         const grupoPersonalizado = document.createElement('optgroup');
-        grupoPersonalizado.label = `Personalizado de ${nombreCliente}`;
+        grupoPersonalizado.label = `Plan de cuentas de ${nombreCliente}`;
         personalizados.forEach((p) => {
           const opt = document.createElement('option');
           opt.value = p.codigo;
@@ -2112,11 +2136,26 @@ function renderResult(data){
         subSelect.appendChild(grupoEstandar);
         agregarOpcionManual();
 
-        // Con PUC personalizado disponible, se preselecciona el
-        // personalizado (es la razón por la que el contador lo
-        // registró) -- sigue pudiendo cambiar al estándar con un clic.
-        currentSubcuentaGasto = personalizados[0].codigo;
-        preseleccionarSubcuentaAprendida();
+        // Con plan propio, se preselecciona la cuenta DEL CLIENTE que
+        // corresponde a lo que Enlaza sugeriría (lo aprendido con este
+        // proveedor o la subcuenta estándar), ej. 514510 -> 51451006
+        // MANTENIMIENTO PUERTAS. Si ninguna se parece, queda la sugerida
+        // y el contador elige en la lista.
+        const nitInputSub = ledger.querySelector('input[data-key="nit_cc"]');
+        const textoFactura = currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''} ${(currentItems || []).map((it) => it.descripcion || '').join(' ')}` : '';
+        const sugerida = ((typeof subcuentaSugerida === 'function') ? subcuentaSugerida(nitInputSub ? nitInputSub.value : '', categoria, textoFactura, currentClienteId) : '')
+          || (opciones[0] ? opciones[0][0] : '');
+        const elegida = (typeof subcuentaParaCliente === 'function')
+          ? subcuentaParaCliente(pucDelCliente, categoria, sugerida, textoFactura)
+          : personalizados[0].codigo;
+        if (elegida && ![...subSelect.options].some((o) => o.value === elegida)) {
+          const opt = document.createElement('option');
+          opt.value = elegida;
+          opt.textContent = `${elegida} — sugerida para este proveedor`;
+          subSelect.insertBefore(opt, subSelect.firstChild);
+        }
+        subSelect.value = elegida || personalizados[0].codigo;
+        currentSubcuentaGasto = subSelect.value;
       }
       // Si con este proveedor ya se usó una subcuenta en esta categoría
       // (ver subcuentaAprendida() en retenciones.js), esa queda
@@ -2126,7 +2165,7 @@ function renderResult(data){
         const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
         const textoFactura = currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '';
         const aprendida = (typeof subcuentaSugerida === 'function')
-          ? subcuentaSugerida(nitInput ? nitInput.value : '', input.value, textoFactura)
+          ? subcuentaSugerida(nitInput ? nitInput.value : '', input.value, textoFactura, currentClienteId)
           : subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
         if (!aprendida) return;
         if (![...subSelect.options].some((o) => o.value === aprendida)) {
@@ -2953,6 +2992,8 @@ function onItemsChanged(){
 function renderItemsPanel(){
   const panel = document.getElementById('itemsPanel');
   if (!panel || currentItems.length === 0) { if (panel) panel.innerHTML = ''; return; }
+  ajustarItemsAlPucCliente(currentItems, currentClienteId,
+    currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '');
 
   const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
   const fechaInput = ledger.querySelector('input[data-key="fecha_factura"]');
@@ -3001,14 +3042,16 @@ function renderItemsPanel(){
     // selector de toda la factura (ver poblarSubcuentas() arriba) --
     // aplicado también línea por línea, para que Fase 4 (desglose por
     // ítem) no se quede con una versión distinta del mismo selector.
-    const personalizadosItem = (pucPersonalizadoPorCliente[currentClienteId] || [])
-      .filter((p) => p.categoria_concepto === item.categoria_concepto);
+    const pucDelCliente = pucPersonalizadoPorCliente[currentClienteId] || [];
+    const personalizadosItem = (typeof cuentasClienteParaCategoria === 'function')
+      ? cuentasClienteParaCategoria(pucDelCliente, item.categoria_concepto)
+      : pucDelCliente.filter((p) => p.categoria_concepto === item.categoria_concepto);
     // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
     // ofrece escribir el código a mano -- ver manejo del valor
     // "__manual__" en el listener de 'change' de .it-subcuenta más abajo.
     const subcuentaOpts = (personalizadosItem.length === 0
       ? estandarOptsHTML
-      : `<optgroup label="Personalizado">${personalizadosItem.map((p) =>
+      : `<optgroup label="Plan del cliente">${personalizadosItem.map((p) =>
           `<option value="${escapeHtml(p.codigo)}"${item.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
         `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`) +
       `<option value="__manual__">✎ Escribir código a mano...</option>`;
@@ -3102,6 +3145,7 @@ function renderItemsPanel(){
       // abajo), que cambió el <select> por un <input> de texto libre --
       // de ahí en adelante se lee como cualquier otro campo de texto.
       currentItems[idx].subcuenta_gasto = e.target.value;
+      currentItems[idx]._subcuentaManual = true;
     }
   });
   tbody.addEventListener('change', (e) => {
@@ -3116,6 +3160,11 @@ function renderItemsPanel(){
       // preseleccionar -- se deja en blanco para que el campo manual que
       // aparece en el próximo render (ver más arriba) obligue a escribirla.
       currentItems[idx].subcuenta_gasto = (opciones && opciones.length > 0) ? opciones[0][0] : '';
+      // ...y, si el cliente tiene plan propio, se vuelve a llevar a su
+      // cuenta en el próximo render (ver ajustarItemsAlPucCliente).
+      currentItems[idx]._subcuentaEstandar = currentItems[idx].subcuenta_gasto;
+      delete currentItems[idx]._pucCliente;
+      delete currentItems[idx]._subcuentaManual;
       // La tarifa de retención recomendada también se recalcula para la
       // categoría nueva -- mismo criterio que la subcuenta de arriba.
       const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(e.target.value) : null;
@@ -3139,6 +3188,7 @@ function renderItemsPanel(){
         if (nuevoInput) nuevoInput.focus();
       } else {
         currentItems[idx].subcuenta_gasto = e.target.value;
+        currentItems[idx]._subcuentaManual = true;
       }
     } else if (e.target.classList.contains('it-tarifa')) {
       currentItems[idx].tarifa_retencion = Number(e.target.value) || 0;

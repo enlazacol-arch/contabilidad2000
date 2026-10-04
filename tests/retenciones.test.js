@@ -529,3 +529,12 @@ test('compra en la suspensión del 572: Éxito $740.588 del 23/06/2026 no lleva 
   inv.fecha_factura = '23/07/2026'; // misma compra en julio: sí (2,5%)
   assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null).bajo, 18515);
 });
+
+test('subcuentaAprendida: primero lo aprendido con ese cliente, luego lo general del proveedor', () => {
+  const R = require('../public/retenciones');
+  R.registrarSubcuentasAprendidas({ '900111222|servicios': '514510', 'cli-1|900111222|servicios': '51451006' });
+  assert.equal(R.subcuentaAprendida('900111222', 'servicios', 'cli-1'), '51451006');
+  assert.equal(R.subcuentaAprendida('900111222', 'servicios', 'cli-2'), '514510');
+  assert.equal(R.subcuentaAprendida('900111222', 'servicios'), '514510');
+  R.registrarSubcuentasAprendidas({});
+});

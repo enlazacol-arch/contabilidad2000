@@ -166,3 +166,28 @@ test('leerSiNoPuc / leerPorcentajePuc', () => {
   assert.equal(leerPorcentajePuc('0'), null);
   assert.equal(leerPorcentajePuc(''), null);
 });
+
+// ---------- cuenta propuesta al causar ----------
+
+const { subcuentaParaCliente, esCuentaDelCliente } = require('../public/puc-cliente');
+
+test('subcuentaParaCliente: sin plan propio deja la sugerida estándar', () => {
+  assert.equal(subcuentaParaCliente([], 'servicios', '514510', 'mantenimiento puertas'), '514510');
+});
+
+test('subcuentaParaCliente: lleva la estándar a la cuenta del cliente', () => {
+  assert.equal(subcuentaParaCliente(PLAN, 'servicios', '514510', 'mantenimiento puertas'), '51451006');
+});
+
+test('subcuentaParaCliente: si lo aprendido ya es del plan del cliente, se respeta', () => {
+  assert.equal(subcuentaParaCliente(PLAN, 'servicios', '51451501', 'mantenimiento puertas'), '51451501');
+});
+
+test('subcuentaParaCliente: una cuenta del cliente inactiva no se propone', () => {
+  assert.notEqual(subcuentaParaCliente(PLAN, 'compras', '51959504', 'dotacion'), '51959504');
+});
+
+test('esCuentaDelCliente', () => {
+  assert.equal(esCuentaDelCliente(PLAN, '51451501'), true);
+  assert.equal(esCuentaDelCliente(PLAN, '519595'), false);
+});

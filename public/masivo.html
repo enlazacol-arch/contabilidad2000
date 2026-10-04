@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="/retenciones.js"></script>
+<script src="/puc-cliente.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -547,6 +548,30 @@ async function precargarPucParaLote(){
     if (itemAbierto) renderItemsMiniPanel(itemAbierto);
   }
 }
+// Cuentas del plan propio del cliente para una categoría (por su grupo
+// del PUC, ver /puc-cliente.js).
+function cuentasDelClienteMasivo(clienteId, categoria){
+  const puc = pucPersonalizadoPorCliente[clienteId] || [];
+  return (typeof cuentasClienteParaCategoria === 'function')
+    ? cuentasClienteParaCategoria(puc, categoria)
+    : puc.filter((p) => p.categoria_concepto === categoria);
+}
+// Lleva la subcuenta de cada ítem al plan del cliente, una vez por
+// cliente; lo elegido a mano no se toca (mismo criterio que Escanear).
+function ajustarItemsAlPucClienteMasivo(item){
+  const puc = pucPersonalizadoPorCliente[item.clienteId];
+  const d = item.data;
+  if (!item.clienteId || !puc || typeof subcuentaParaCliente !== 'function' || !Array.isArray(d.items)) return;
+  const texto = `${d.nombre_razon_social || ''} ${d.concepto || ''}`;
+  d.items.forEach((it) => {
+    if (it._subcuentaManual || it._pucCliente === item.clienteId) return;
+    if (it._subcuentaEstandar === undefined) it._subcuentaEstandar = it.subcuenta_gasto || '';
+    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, it.categoria_concepto, item.clienteId) : '';
+    it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${texto}`);
+    it._pucCliente = item.clienteId;
+  });
+}
+
 // Misma normalización que usa el servidor (server.js normalizarNit) --
 // si el DV viene pegado con guion (ej. "901.128.185-3"), se quita
 // antes de limpiar el resto, para que el mismo NIT siempre calce con
@@ -955,6 +980,7 @@ function renderItemsMiniPanel(item){
   const panel = document.getElementById('itemsMiniPanel');
   const d = item.data;
   if (!panel || !Array.isArray(d.items) || d.items.length === 0) { if (panel) panel.innerHTML = ''; return; }
+  ajustarItemsAlPucClienteMasivo(item);
 
   const totalItems = d.items.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
   const totalFactura = Number(d.valor_sin_iva) || 0;
@@ -977,13 +1003,13 @@ function renderItemsMiniPanel(item){
     const opcionesSubcuenta = (SUBCUENTAS_GASTO[it.categoria_concepto] || SUBCUENTAS_GASTO['otro']);
     const estandarOptsHTML = opcionesSubcuenta.map(([codigo, nombre]) =>
       `<option value="${codigo}"${it.subcuenta_gasto === codigo ? ' selected' : ''}>${codigo === 'inventario' ? escapeHtml(nombre) : escapeHtml(codigo + ' — ' + nombre)}</option>`).join('');
-    const personalizadosItem = (pucPersonalizadoPorCliente[item.clienteId] || []).filter((p) => p.categoria_concepto === it.categoria_concepto);
+    const personalizadosItem = cuentasDelClienteMasivo(item.clienteId, it.categoria_concepto);
     // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
     // ofrece escribir el código a mano -- ver manejo del valor
     // "__manual__" en el listener de 'change' de .im-subcuenta más abajo.
     const subcuentaOpts = (personalizadosItem.length === 0
       ? estandarOptsHTML
-      : `<optgroup label="Personalizado">${personalizadosItem.map((p) => `<option value="${escapeHtml(p.codigo)}"${it.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
+      : `<optgroup label="Plan del cliente">${personalizadosItem.map((p) => `<option value="${escapeHtml(p.codigo)}"${it.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
         `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`) +
       `<option value="__manual__">✎ Escribir código a mano...</option>`;
     // Sin ninguna opción (categoría "Otro" sin PUC personalizado para
@@ -1077,6 +1103,7 @@ function renderItemsMiniPanel(item){
       // 'change' abajo), que cambió el <select> por un <input> de
       // texto libre -- de ahí en adelante se lee como cualquier otro.
       d.items[idx].subcuenta_gasto = e.target.value;
+      d.items[idx]._subcuentaManual = true;
       guardarEdicionItem(item);
     }
   });
@@ -1089,6 +1116,10 @@ function renderItemsMiniPanel(item){
       // preseleccionar -- se deja en blanco para que el campo manual
       // que aparece en el próximo render obligue a escribirla.
       d.items[idx].subcuenta_gasto = (opciones && opciones.length > 0) ? opciones[0][0] : '';
+      // ...que se vuelve a llevar al plan del cliente en el próximo render.
+      d.items[idx]._subcuentaEstandar = d.items[idx].subcuenta_gasto;
+      delete d.items[idx]._pucCliente;
+      delete d.items[idx]._subcuentaManual;
       // La tarifa de retención recomendada también se recalcula para la
       // categoría nueva -- mismo criterio que la subcuenta de arriba.
       const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(e.target.value) : null;
@@ -1110,6 +1141,7 @@ function renderItemsMiniPanel(item){
         if (nuevoInput) nuevoInput.focus();
       } else {
         d.items[idx].subcuenta_gasto = e.target.value;
+        d.items[idx]._subcuentaManual = true;
         guardarEdicionItem(item);
       }
     } else if (e.target.classList.contains('im-tarifa')) {
@@ -1958,19 +1990,28 @@ function renderSummary(){
     // papelería, aseo...).
     const categoriaActual = d.categoria_concepto || 'otro';
     const opcionesEstandarActual = SUBCUENTAS_GASTO[categoriaActual] || SUBCUENTAS_GASTO['otro'];
-    const personalizadosActual = (pucPersonalizadoPorCliente[item.clienteId] || []).filter((p) => p.categoria_concepto === categoriaActual);
+    const personalizadosActual = cuentasDelClienteMasivo(item.clienteId, categoriaActual);
     // Sin ninguna opción (categoría "Otro" sin PUC personalizado para
     // este cliente todavía) no hay nada razonable que preseleccionar --
     // se deja en blanco y se pide la cuenta escrita a mano más abajo.
     const sinOpcionesSubcuenta = opcionesEstandarActual.length === 0 && personalizadosActual.length === 0;
     // Subcuenta usada antes con este proveedor (ver subcuentaAprendida()
     // en retenciones.js) -- va antes que la primera opción de la lista.
+    const textoFacturaActual = `${d.nombre_razon_social || ''} ${d.concepto || ''} ${(d.items || []).map((it) => it.descripcion || '').join(' ')}`;
     const aprendidaActual = (typeof subcuentaSugerida === 'function')
-      ? subcuentaSugerida(d.nit_cc, categoriaActual, `${d.nombre_razon_social || ''} ${d.concepto || ''}`)
+      ? subcuentaSugerida(d.nit_cc, categoriaActual, textoFacturaActual, item.clienteId)
       : ((typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '');
-    const subcuentaActual = d.subcuenta_gasto || aprendidaActual || (personalizadosActual.length > 0 ? personalizadosActual[0].codigo : (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : ''));
-    if (!d.subcuenta_gasto) d.subcuenta_gasto = subcuentaActual; // fijar el default la primera vez
-    const aprendidaFueraDeLista = aprendidaActual && !opcionesEstandarActual.some(([c]) => c === aprendidaActual) && !personalizadosActual.some((p) => p.codigo === aprendidaActual);
+    let subcuentaActual = d.subcuenta_gasto || aprendidaActual || (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : '');
+    // Con plan propio del cliente: su cuenta equivalente (una vez por
+    // cliente; si el contador ya eligió otra a mano, se respeta).
+    const pucDelClienteActual = pucPersonalizadoPorCliente[item.clienteId];
+    if (pucDelClienteActual && item.clienteId && d._pucCliente !== item.clienteId && !item._subcuentaElegida && typeof subcuentaParaCliente === 'function') {
+      if (d._subcuentaEstandar === undefined) d._subcuentaEstandar = subcuentaActual;
+      subcuentaActual = subcuentaParaCliente(pucDelClienteActual, categoriaActual, d._subcuentaEstandar, textoFacturaActual);
+      d._pucCliente = item.clienteId;
+    }
+    d.subcuenta_gasto = subcuentaActual;
+    const aprendidaFueraDeLista = aprendidaActual && aprendidaActual === subcuentaActual && !opcionesEstandarActual.some(([c]) => c === aprendidaActual) && !personalizadosActual.some((p) => p.codigo === aprendidaActual);
     const estandarOptsActualHTML = (aprendidaFueraDeLista
       ? `<option value="${escapeHtml(aprendidaActual)}" ${aprendidaActual === subcuentaActual ? 'selected' : ''}>${escapeHtml(aprendidaActual)} — sugerida para este proveedor</option>` : '') +
       opcionesEstandarActual.map(([codigo, nombre]) =>
@@ -1983,7 +2024,7 @@ function renderSummary(){
     // más abajo, que fuerza el campo de texto cuando se elige).
     const subcuentaOpts = (personalizadosActual.length === 0
       ? estandarOptsActualHTML
-      : `<optgroup label="Personalizado">${personalizadosActual.map((p) =>
+      : `<optgroup label="Plan del cliente">${personalizadosActual.map((p) =>
           `<option value="${escapeHtml(p.codigo)}" ${p.codigo === subcuentaActual ? 'selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`
         ).join('')}</optgroup>` +
         `<optgroup label="Estándar (PUC)">${estandarOptsActualHTML}</optgroup>`) +
@@ -2103,13 +2144,12 @@ summaryBody.addEventListener('change', (e) => {
     // Al cambiar la categoría, la subcuenta vieja ya no tiene sentido
     // -- se repuebla sola con el default de la categoría nueva.
     // Si el cliente tiene PUC personalizado para esa categoría, se prioriza.
-    const personalizadosCat = (pucPersonalizadoPorCliente[item.clienteId] || []).filter((p) => p.categoria_concepto === e.target.value);
-    if (personalizadosCat.length > 0) {
-      item.data.subcuenta_gasto = personalizadosCat[0].codigo;
-    } else {
-      const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-      item.data.subcuenta_gasto = (opciones && opciones.length > 0) ? opciones[0][0] : '';
-    }
+    // Si el cliente tiene plan propio, se lleva a su cuenta equivalente
+    // al repintar (ver la tarjeta: subcuentaParaCliente).
+    item.data.subcuenta_gasto = '';
+    delete item.data._pucCliente;
+    delete item.data._subcuentaEstandar;
+    item._subcuentaElegida = false;
     // Cambiar de categoría sale del modo "escribir a mano" -- se vuelve
     // a mostrar la lista (con el default de la categoría nueva).
     item._subcuentaManual = false;
@@ -2125,6 +2165,7 @@ summaryBody.addEventListener('change', (e) => {
       renderSummary();
     } else {
       item.data.subcuenta_gasto = e.target.value;
+      item._subcuentaElegida = true;
     }
   }
 
