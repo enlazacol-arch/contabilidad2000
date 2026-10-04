@@ -144,6 +144,9 @@ body{
 a{ color:var(--pet-600); text-underline-offset:2px; }
 a:hover{ color:var(--pet-800); }
 img{ max-width:100%; }
+/* Un <select> toma el ancho de su opción más larga: una razón social
+   extensa lo hacía desbordar la pantalla en celular. */
+select{ max-width:100%; text-overflow:ellipsis; }
 h1,h2,h3,h4{ text-wrap:balance; }
 h2,h3,h4{ font-family:var(--font-display); color:var(--text); letter-spacing:-0.01em; }
 :where(h2){ font-size:var(--t-20); line-height:var(--lh-snug); font-weight:700; }
