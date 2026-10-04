@@ -477,3 +477,11 @@ test('Art. 383 por proveedor: si el NIT ya lo pidió este año, aplica aunque es
   assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null).aplicaArticulo383, true);
   RA.registrarNitsArticulo383([]);
 });
+
+test('servicios públicos: la subcuenta sale del servicio que dice el documento', () => {
+  const sub = (nombre, concepto) => RA.normalizarItemsDesdeIA({ categoria_concepto: 'servicios_publicos', nombre_razon_social: nombre, concepto, valor_sin_iva: 43706 })[0].subcuenta_gasto;
+  assert.equal(sub('COMCEL S.A.', 'Servicio de telefonía móvil'), '513535'); // Claro
+  assert.equal(sub('EMPRESAS PÚBLICAS DE MEDELLÍN', 'Energía eléctrica periodo junio'), '513530');
+  assert.equal(sub('AGUAS DE MANIZALES', 'Acueducto y alcantarillado'), '513525');
+  assert.equal(sub('VANTI S.A.', 'Consumo de gas natural'), '513555');
+});

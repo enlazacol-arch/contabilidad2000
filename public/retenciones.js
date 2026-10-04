@@ -825,6 +825,25 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   };
 }
 
+// ---------- Subcuenta de un servicio público según el documento ----------
+// Una factura de servicios públicos dice explícitamente qué servicio es
+// (energía, acueducto, teléfono/celular/internet, gas, aseo). Antes todas
+// caían en una sola cuenta ("513528", que no existe en el PUC); ahora se
+// toma la subcuenta real del texto del documento. Sin coincidencia, se
+// usa la primera de la lista y el contador la confirma.
+const SUBCUENTA_POR_SERVICIO = [
+  [/tel[eé]fono|telefon[ií]a|celular|m[oó]vil|internet|datos|comcel|claro|movistar|tigo|wom\b|\bune\b|etb/i, '513535'],
+  [/energ[ií]a|el[eé]ctric|\bluz\b|kwh|enel|codensa|celsia|electrohuila|essa\b|chec\b/i, '513530'],
+  [/acueducto|alcantarillado|\bagua\b|m3|m³/i, '513525'],
+  [/\bgas\b|vanti|gases de/i, '513555'],
+  [/\baseo\b|recolecci[oó]n|basuras|residuos/i, '513505'],
+];
+function subcuentaServicioPublico(texto) {
+  const t = String(texto || '');
+  const encontrada = SUBCUENTA_POR_SERVICIO.find(([patron]) => patron.test(t));
+  return encontrada ? encontrada[1] : '';
+}
+
 // ---------- Subcuenta aprendida por proveedor ----------
 // La última subcuenta de gasto que el contador usó con un proveedor en
 // una categoría (facturas de egreso aprobadas). Se usa como subcuenta
@@ -937,6 +956,10 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
   const subcuentaPorDefecto = (categoria) => {
     const aprendida = subcuentaAprendida(data.nit_cc, categoria);
     if (aprendida) return aprendida;
+    if (categoria === 'servicios_publicos') {
+      const porServicio = subcuentaServicioPublico(`${data.nombre_razon_social || ''} ${data.concepto || ''}`);
+      if (porServicio) return porServicio;
+    }
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
     // 'otro' (y cualquier categoría sin subcuentas típicas) ya no tiene
     // un default que adivinar -- queda en blanco y el selector de la
@@ -1366,6 +1389,7 @@ if (typeof module !== 'undefined' && module.exports) {
     autoCompletarAiuDesdeDescripcion,
     consolidarAiuEnItems,
     registrarSubcuentasAprendidas,
+    subcuentaServicioPublico,
     subcuentaAprendida,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,
