@@ -805,6 +805,22 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   };
 }
 
+// ---------- Subcuenta aprendida por proveedor ----------
+// La última subcuenta de gasto que el contador usó con un proveedor en
+// una categoría (facturas de egreso aprobadas). Se usa como subcuenta
+// preseleccionada para sus próximas facturas, antes que la primera
+// opción de la lista general. Las pantallas la cargan desde
+// /api/subcuentas-aprendidas y la registran aquí.
+let SUBCUENTAS_APRENDIDAS = {};
+function registrarSubcuentasAprendidas(mapa) {
+  SUBCUENTAS_APRENDIDAS = mapa && typeof mapa === 'object' ? mapa : {};
+}
+function subcuentaAprendida(nit, categoria) {
+  const nitLimpio = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
+  if (!nitLimpio || !categoria) return '';
+  return SUBCUENTAS_APRENDIDAS[`${nitLimpio}|${String(categoria).toLowerCase()}`] || '';
+}
+
 // ---------- AIU consolidado (vigilancia, aseo, temporales) ----------
 //
 // La retención de estos servicios es el 2%/1% sobre el AIU, no sobre el
@@ -899,6 +915,8 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
     try { raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
   }
   const subcuentaPorDefecto = (categoria) => {
+    const aprendida = subcuentaAprendida(data.nit_cc, categoria);
+    if (aprendida) return aprendida;
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
     // 'otro' (y cualquier categoría sin subcuentas típicas) ya no tiene
     // un default que adivinar -- queda en blanco y el selector de la
@@ -1327,6 +1345,8 @@ if (typeof module !== 'undefined' && module.exports) {
     esCategoriaBaseAiu,
     autoCompletarAiuDesdeDescripcion,
     consolidarAiuEnItems,
+    registrarSubcuentasAprendidas,
+    subcuentaAprendida,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,
     montoCategoriaEnFactura,

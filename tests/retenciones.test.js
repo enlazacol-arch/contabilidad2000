@@ -436,3 +436,20 @@ test('AIU: no se deduce del IVA si el IVA es sobre todo el valor', () => {
   const items = RA.normalizarItemsDesdeIA(data);
   assert.equal(items[0].aiu, '');
 });
+
+// ---------- Subcuenta aprendida por proveedor ----------
+test('subcuenta aprendida: la próxima factura del proveedor la trae preseleccionada', () => {
+  RA.registrarSubcuentasAprendidas({ '71261773|servicios': '514515' });
+  const items = RA.normalizarItemsDesdeIA({ nit_cc: '71.261.773-2', categoria_concepto: 'servicios', concepto: 'Mantenimiento bomba', valor_sin_iva: 280000 });
+  assert.equal(items[0].subcuenta_gasto, '514515');
+  // otro proveedor, o la misma persona en otra categoría: lista general
+  assert.equal(RA.normalizarItemsDesdeIA({ nit_cc: '900123456', categoria_concepto: 'servicios', valor_sin_iva: 1 })[0].subcuenta_gasto, '513595');
+  assert.equal(RA.normalizarItemsDesdeIA({ nit_cc: '71261773', categoria_concepto: 'compras', valor_sin_iva: 1 })[0].subcuenta_gasto, '519595');
+  RA.registrarSubcuentasAprendidas({});
+});
+
+test('PUC: compras ya no preselecciona Inventarios y no quedan códigos inexistentes', () => {
+  assert.equal(RA.SUBCUENTAS_GASTO.compras[0][0], '519595');
+  const todos = Object.values(RA.SUBCUENTAS_GASTO).flat().map(([c]) => c);
+  for (const inexistente of ['513528', '513560', '513565', '513570', '513545']) assert.equal(todos.includes(inexistente), false);
+});
