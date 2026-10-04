@@ -12,6 +12,7 @@ const {
   nitsCoinciden,
   limpiarNitLeido,
   nitTieneTexto,
+  nombresCompatibles,
   clasificarMovimiento,
 } = require('../public/movimiento');
 
@@ -147,4 +148,48 @@ test('nitTieneTexto: detecta un nombre escrito en el campo NIT', () => {
   assert.equal(nitTieneTexto('bosques de la macarena'), true);
   assert.equal(nitTieneTexto('900.579.294-9'), false);
   assert.equal(nitTieneTexto('NIT 900579294'), true);
+});
+
+// ---------- El nombre también debe coincidir (caso real IMB, oct. 2026) ----------
+const conjunto = { id: 'PH', nombre: 'CONJUNTO RESIDENCIAL URBANIZACION BOSQUES DE LA MACARENA P.H.', nit: '900579294' };
+
+test('nombresCompatibles: mismo cliente escrito distinto sí; otra empresa no', () => {
+  assert.equal(nombresCompatibles('Bosques de la Macarena', conjunto.nombre), true);
+  assert.equal(nombresCompatibles('DISTRIBUIDORA ANDINA S.A.S.', 'Distribuidora Andina'), true);
+  assert.equal(nombresCompatibles('IMB Ingenieria en Mantenimiento de Equipos de Bombeo', conjunto.nombre), false);
+  assert.equal(nombresCompatibles('', conjunto.nombre), true); // sin nombre: no hay con qué comparar
+});
+
+test('IMB: la IA puso el NIT del conjunto como emisor -> ya no sale como INGRESO', () => {
+  const r = clasificarMovimiento({
+    nit_cc: '900579294', nombre_razon_social: 'IMB Ingenieria en Mantenimiento de Equipos de Bombeo',
+    adquiriente_nit: '', adquiriente_nombre: 'BOSQUES DE LA MACARENA',
+  }, [conjunto]);
+  assert.notEqual(r.tipoMovimiento, 'ingreso');
+  assert.equal(r.confiado, false);
+  assert.equal(r.motivo, 'nombre_no_coincide');
+  assert.match(r.aviso, /IMB/);
+});
+
+test('IMB bien leída: egreso del conjunto, confiado', () => {
+  const r = clasificarMovimiento({
+    nit_cc: '71261773', nombre_razon_social: 'ANDRÉS FELIPE OSORIO PEÑA',
+    adquiriente_nit: '900579294', adquiriente_nombre: 'Bosques de la Macarena',
+  }, [conjunto]);
+  assert.equal(r.tipoMovimiento, 'egreso');
+  assert.equal(r.clienteId, 'PH');
+  assert.equal(r.confiado, true);
+});
+
+test('emisor y comprador con el mismo NIT: queda por confirmar con aviso', () => {
+  const r = clasificarMovimiento({ nit_cc: '900579294', nombre_razon_social: 'IMB', adquiriente_nit: '900579294', adquiriente_nombre: 'Bosques de la Macarena' }, [conjunto]);
+  assert.equal(r.tipoMovimiento, 'egreso');
+  assert.equal(r.confiado, false);
+  assert.match(r.aviso, /iguales/);
+});
+
+test('venta real del cliente (emisor = cliente, mismo nombre) sigue siendo ingreso', () => {
+  const r = clasificarMovimiento({ nit_cc: '900.579.294-9', nombre_razon_social: 'CONJUNTO RESIDENCIAL BOSQUES DE LA MACARENA', adquiriente_nit: '71261773', adquiriente_nombre: 'Juan Pérez' }, [conjunto]);
+  assert.equal(r.tipoMovimiento, 'ingreso');
+  assert.equal(r.confiado, true);
 });

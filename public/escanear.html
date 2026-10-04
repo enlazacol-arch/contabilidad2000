@@ -1037,6 +1037,7 @@ function renderMovFallback(data){
 
   movStatusEl.innerHTML = `
     <div class="mov-fallback">
+      ${avisoMovimientoHtml()}
       <div class="msg">No identificamos automáticamente a cuál de tus clientes pertenece esta factura. Elige cuál es:</div>
       <select id="movClienteSelect">
         <option value="">-- Selecciona el cliente --</option>
@@ -1094,6 +1095,7 @@ function renderMovFallback(data){
 function renderMovFallbackClienteFijo(cliente, data){
   movStatusEl.innerHTML = `
     <div class="mov-fallback">
+      ${avisoMovimientoHtml()}
       <div class="msg">Esta factura no muestra el NIT de ${escapeHtml(cliente.nombre)} ni como comprador ni como vendedor -- confirma manualmente si es un ingreso o un egreso para él:</div>
       <select id="movTipoSelectFijo">
         <option value="">-- Selecciona --</option>
@@ -1114,6 +1116,12 @@ function renderMovFallbackClienteFijo(cliente, data){
   });
 }
 
+// Por qué no se pudo decidir solo (ej. el NIT coincide con un cliente
+// pero el nombre leído es de otra empresa) -- ver clasificarMovimiento().
+let avisoMovimiento = '';
+const avisoMovimientoHtml = () => avisoMovimiento
+  ? `<div class="msg" style="margin-bottom:8px;"><b>⚠ ${escapeHtml(avisoMovimiento)}</b></div>` : '';
+
 function detectClient(data){
   currentClienteId = '';
 
@@ -1123,6 +1131,7 @@ function detectClient(data){
   if (clientePreseleccionado) {
     const c = clientePreseleccionado;
     const clasif = clasificarMovimiento(data, myClients, { clienteFijo: c });
+    avisoMovimiento = clasif.aviso || '';
     const esComprador = clasif.motivo === 'adquiriente';
     const esVendedor = clasif.motivo === 'emisor';
     if (esComprador) {
@@ -1147,6 +1156,7 @@ function detectClient(data){
   // ADQUIRIENTE (compró), ingreso si es el EMISOR (vendió). Compara los
   // NIT normalizados -- antes "900.123.456-7" no coincidía con "900123456".
   const clasif = clasificarMovimiento(data, myClients);
+  avisoMovimiento = clasif.aviso || '';
   const asComprador = clasif.motivo === 'adquiriente' ? clasif.cliente : null;
   const asVendedor = clasif.motivo === 'emisor' ? clasif.cliente : null;
 

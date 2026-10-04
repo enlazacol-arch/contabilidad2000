@@ -2059,6 +2059,11 @@ function renderSummary(){
         <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
       </div>
       ${item.errorGuardado ? `<div class="fc-mensaje fc-mensaje-error">${escapeHtml(item.errorGuardado)}</div>` : ''}
+      ${item.data && item.data.aviso_movimiento && item.estado !== 'listo' ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
+          <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml(item.data.aviso_movimiento)}</div>
+        </div>
+      ` : ''}
       ${tieneExcepcion(item.data, 'nit_por_verificar') ? `
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
           <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml((listaExcepciones(item.data).find((x) => x.tipo === 'nit_por_verificar') || {}).detalle || '')}</div>

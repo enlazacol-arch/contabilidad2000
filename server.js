@@ -3892,7 +3892,7 @@ async function detectarClienteYMovimientoServidor(contadorId, data, clienteFijoI
   const { rows: clientes } = await pool.query('SELECT id, nit, dv, nombre FROM clients WHERE contador_id = $1', [contadorId]);
   const clienteFijo = clienteFijoId ? clientes.find((c) => c.id === clienteFijoId) || null : null;
   const r = clasificarMovimiento(data, clientes, { clienteFijo });
-  return { clienteId: r.clienteId, tipoMovimiento: r.tipoMovimiento, confiado: r.confiado, motivo: r.motivo, otroClienteId: r.otroClienteId };
+  return { clienteId: r.clienteId, tipoMovimiento: r.tipoMovimiento, confiado: r.confiado, motivo: r.motivo, otroClienteId: r.otroClienteId, aviso: r.aviso };
 }
 
 app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {

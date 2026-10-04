@@ -87,6 +87,31 @@ function nitTieneTexto(nit) {
   return /[a-záéíóúñ]{2,}/i.test(String(nit == null ? '' : nit));
 }
 
+// ¿El nombre leído en la factura puede ser el de ese cliente?
+// Se usa para no confiar a ciegas en un NIT: si la IA anotó el NIT del
+// comprador como si fuera el del emisor (pasó con una cuenta de cobro de
+// IMB / Andrés Felipe Osorio: quedó el NIT del Conjunto Bosques de la
+// Macarena como emisor y la factura salió como INGRESO), el nombre del
+// emisor ("IMB INGENIERIA...") no tiene nada que ver con el del cliente.
+// Compara palabras significativas, sin tildes ni palabras genéricas.
+// Si alguno de los dos nombres está vacío, no hay con qué comparar: true.
+const PALABRAS_GENERICAS_NOMBRE = new Set(('DE LA EL LOS LAS DEL Y E EN A AL S SA SAS LTDA LIMITADA CIA COMPANIA SOCIEDAD ' +
+  'EU BIC PH P H CONJUNTO RESIDENCIAL URBANIZACION EDIFICIO UNIDAD COPROPIEDAD PROPIEDAD HORIZONTAL ' +
+  'COLOMBIA GRUPO SERVICIOS COMERCIALIZADORA DISTRIBUIDORA INVERSIONES SOLUCIONES EMPRESA EMPRESAS ' +
+  'NACIONAL INTERNACIONAL ASOCIADOS CORPORACION FUNDACION ASOCIACION SAS.').split(/\s+/));
+function palabrasNombre(nombre) {
+  return String(nombre == null ? '' : nombre)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ')
+    .split(/\s+/).filter((p) => p.length >= 3 && !PALABRAS_GENERICAS_NOMBRE.has(p));
+}
+function nombresCompatibles(nombreLeido, nombreCliente) {
+  const leido = palabrasNombre(nombreLeido);
+  const cliente = palabrasNombre(nombreCliente);
+  if (leido.length === 0 || cliente.length === 0) return true;
+  return leido.some((p) => cliente.includes(p));
+}
+
 // Decide ingreso/egreso y a qué cliente pertenece una factura leída.
 //
 // `factura`: objeto con nit_cc (emisor/vendedor) y adquiriente_nit (comprador).
@@ -111,6 +136,7 @@ function clasificarMovimiento(factura, clientes, opciones) {
   const datos = factura || {};
   const lista = Array.isArray(clientes) ? clientes : [];
   const clienteFijo = opciones && opciones.clienteFijo ? opciones.clienteFijo : null;
+  const avisos = [];
 
   const resultado = (tipoMovimiento, cliente, confiado, motivo, otroClienteId) => ({
     tipoMovimiento,
@@ -119,25 +145,48 @@ function clasificarMovimiento(factura, clientes, opciones) {
     confiado,
     motivo,
     otroClienteId: otroClienteId || '',
+    aviso: avisos.join(' '),
   });
 
+  // Emisor y comprador con el mismo NIT: uno de los dos quedó mal leído.
+  const mismoNit = nitsCoinciden(datos.nit_cc, datos.adquiriente_nit);
+  if (mismoNit) {
+    avisos.push(`El NIT del emisor y el del comprador quedaron iguales (${normalizarNitComparable(datos.nit_cc)}): uno de los dos está mal leído.`);
+  }
+
+  // Un NIT que coincide con el cliente solo cuenta si el nombre leído de
+  // ese mismo lado también puede ser el del cliente.
+  const coincideComprador = (c) => nitsCoinciden(datos.adquiriente_nit, c.nit) && nombresCompatibles(datos.adquiriente_nombre, c.nombre);
+  const coincideVendedor = (c) => !mismoNit && nitsCoinciden(datos.nit_cc, c.nit) && nombresCompatibles(datos.nombre_razon_social, c.nombre);
+  const avisarNombre = (c, lado, nombreLeido) => {
+    avisos.push(`El NIT del ${lado} coincide con tu cliente ${c.nombre}, pero el nombre leído es "${nombreLeido}". Confirma a qué cliente pertenece la factura.`);
+  };
+
   if (clienteFijo) {
-    if (nitsCoinciden(datos.adquiriente_nit, clienteFijo.nit)) return resultado('egreso', clienteFijo, true, 'adquiriente');
-    if (nitsCoinciden(datos.nit_cc, clienteFijo.nit)) return resultado('ingreso', clienteFijo, true, 'emisor');
-    return resultado('egreso', clienteFijo, false, 'cliente_fijo_sin_coincidencia');
+    if (coincideComprador(clienteFijo)) return resultado('egreso', clienteFijo, avisos.length === 0, 'adquiriente');
+    if (coincideVendedor(clienteFijo)) return resultado('ingreso', clienteFijo, true, 'emisor');
+    if (nitsCoinciden(datos.nit_cc, clienteFijo.nit) && !mismoNit) avisarNombre(clienteFijo, 'emisor', datos.nombre_razon_social);
+    if (nitsCoinciden(datos.adquiriente_nit, clienteFijo.nit)) avisarNombre(clienteFijo, 'comprador', datos.adquiriente_nombre);
+    return resultado('egreso', clienteFijo, false, avisos.length ? 'nombre_no_coincide' : 'cliente_fijo_sin_coincidencia');
   }
 
   if (lista.length === 0) return resultado('egreso', null, false, 'sin_clientes');
 
-  const comprador = lista.find((c) => nitsCoinciden(datos.adquiriente_nit, c.nit));
-  const vendedor = lista.find((c) => nitsCoinciden(datos.nit_cc, c.nit));
+  const comprador = lista.find(coincideComprador);
+  const vendedor = lista.find(coincideVendedor);
 
   if (comprador) {
     const otro = vendedor && vendedor.id !== comprador.id ? vendedor.id : '';
-    return resultado('egreso', comprador, true, 'adquiriente', otro);
+    return resultado('egreso', comprador, avisos.length === 0, 'adquiriente', otro);
   }
   if (vendedor) return resultado('ingreso', vendedor, true, 'emisor');
-  return resultado('egreso', null, false, 'sin_coincidencia');
+
+  // El NIT coincidía con un cliente, pero el nombre no: no se adivina.
+  const porNitVendedor = !mismoNit && lista.find((c) => nitsCoinciden(datos.nit_cc, c.nit));
+  const porNitComprador = lista.find((c) => nitsCoinciden(datos.adquiriente_nit, c.nit));
+  if (porNitVendedor) avisarNombre(porNitVendedor, 'emisor', datos.nombre_razon_social);
+  if (porNitComprador) avisarNombre(porNitComprador, 'comprador', datos.adquiriente_nombre);
+  return resultado('egreso', null, false, avisos.length ? 'nombre_no_coincide' : 'sin_coincidencia');
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -147,6 +196,7 @@ if (typeof module !== 'undefined' && module.exports) {
     nitsCoinciden,
     limpiarNitLeido,
     nitTieneTexto,
+    nombresCompatibles,
     clasificarMovimiento,
   };
 }
