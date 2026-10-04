@@ -65,6 +65,28 @@ function nitsCoinciden(nitLeido, nitCliente) {
   return false;
 }
 
+// Limpia un NIT tal como lo leyó la IA o lo escribió el contador.
+// - "900.123.456-7" -> "900123456"
+// - un texto que no es un NIT ("bosques de la macarena", "Propiedad
+//   Horizontal") -> "" (antes se guardaba tal cual en el campo NIT y
+//   después no había cómo corregirlo)
+// Un NIT/cédula colombiano tiene entre 5 y 15 dígitos.
+function limpiarNitLeido(nit) {
+  const texto = String(nit == null ? '' : nit).trim();
+  if (!texto) return '';
+  const digitos = normalizarNitComparable(texto);
+  const letras = (texto.match(/[a-záéíóúñ]/gi) || []).length;
+  if (letras > 3 && letras >= digitos.length) return '';
+  if (digitos.length < 5 || digitos.length > 15) return '';
+  return digitos;
+}
+
+// ¿El texto escrito en un campo de NIT es claramente otra cosa (un
+// nombre)? Lo usa el servidor para no aceptar ese dato al guardar.
+function nitTieneTexto(nit) {
+  return /[a-záéíóúñ]{2,}/i.test(String(nit == null ? '' : nit));
+}
+
 // Decide ingreso/egreso y a qué cliente pertenece una factura leída.
 //
 // `factura`: objeto con nit_cc (emisor/vendedor) y adquiriente_nit (comprador).
@@ -123,6 +145,8 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizarNitComparable,
     calcularDvNit,
     nitsCoinciden,
+    limpiarNitLeido,
+    nitTieneTexto,
     clasificarMovimiento,
   };
 }

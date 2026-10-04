@@ -18,7 +18,7 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 // Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
-const { clasificarMovimiento } = require('./public/movimiento');
+const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto } = require('./public/movimiento');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -2224,6 +2224,18 @@ app.get('/api/acumulado-categoria', requireAuth, async (req, res) => {
 // Guardar una factura ya revisada por el contador
 app.post('/api/invoices', requireAuth, async (req, res) => {
   try {
+    // Un NIT con un nombre escrito por error (ej. "bosques de la
+    // macarena") no se guarda: después no había cómo corregirlo. Si
+    // trae puntos, guiones o espacios, se guarda solo con los dígitos.
+    for (const [campoNit, etiqueta] of [['nit_cc', 'del emisor'], ['adquiriente_nit', 'del comprador']]) {
+      const valor = req.body[campoNit];
+      if (!valor) continue;
+      const limpio = limpiarNitLeido(valor);
+      if (!limpio && nitTieneTexto(valor)) {
+        return res.status(400).json({ error: `El NIT ${etiqueta} tiene texto ("${String(valor).slice(0, 40)}"). Escribe solo los números del NIT, o déjalo vacío si el documento no lo trae.` });
+      }
+      if (limpio) req.body[campoNit] = limpio;
+    }
     // cliente_id viene del navegador -- si trae uno, hay que confirmar
     // que sea un cliente de ESTE contador antes de guardarlo. Sin este
     // chequeo, cualquiera podría mandar el id de un cliente ajeno (por
@@ -3375,7 +3387,7 @@ const CAMPOS_FACTURA_JSON = `{
   "fecha_factura": "fecha de la factura en formato DD/MM/AAAA",
   "valor_sin_iva": "subtotal ANTES de IVA, en pesos colombianos ENTEROS (ver regla de formato abajo)",
   "valor_iva": "valor del IVA (impuesto), en pesos colombianos ENTEROS. Si la factura no discrimina IVA, usa 0",
-  "valor_con_iva": "valor TOTAL de la factura (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. Este debe ser el total final que paga el cliente",
+  "valor_con_iva": "valor TOTAL de la factura ANTES de descontar retenciones (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. OJO: algunas facturas y cuentas de cobro muestran como 'Total a pagar' o 'Neto a pagar' un valor que YA RESTÓ la Retención en la Fuente, ReteIVA o ReteICA -- en ese caso NO uses ese neto: usa el total antes de retenciones (subtotal + IVA) y anota cada retención descontada en su propio campo (rete_fuente, rete_iva, rete_ica).",
   "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
   "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
@@ -3429,7 +3441,7 @@ ${REGLAS_FORMATO_VALORES}`;
 // una factura vieja se ve mal leída, se sepa exactamente qué modelo y
 // qué versión del prompt la generó -- barato de dejar registrado ahora,
 // imposible de reconstruir después con precisión.
-const INVOICE_PROMPT_VERSION = 'v2';
+const INVOICE_PROMPT_VERSION = 'v3';
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -3581,6 +3593,44 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   parsed.concepto = normalizarMayusculasTexto(parsed.concepto);
 
   parsed.confianza_campos = sanitizarConfianzaCampos(parsed.confianza_campos);
+
+  // ---------- Red de seguridad sobre lo que leyó la IA ----------
+  // (ajustes pedidos en la revisión contable de oct. 2026)
+
+  // NIT: solo dígitos. Si la IA puso un nombre en el campo NIT (ej. el
+  // NIT del comprador quedó como "bosques de la macarena"), se deja
+  // vacío y se baja su confianza, para que el contador lo complete.
+  for (const campoNit of ['nit_cc', 'adquiriente_nit']) {
+    const original = parsed[campoNit];
+    const limpio = limpiarNitLeido(original);
+    if (String(original || '').trim() && !limpio && campoNit === 'nit_cc') {
+      parsed.confianza_campos.nit_cc = 0;
+    }
+    parsed[campoNit] = limpio;
+  }
+
+  // Nombres siempre en MAYÚSCULAS -- la IA los copia como vengan en el
+  // documento, y quedaban unos en minúsculas y otros en mayúsculas.
+  for (const campoNombre of ['nombre_razon_social', 'adquiriente_nombre']) {
+    if (typeof parsed[campoNombre] === 'string') {
+      parsed[campoNombre] = parsed[campoNombre].replace(/\s+/g, ' ').trim().toLocaleUpperCase('es-CO');
+    }
+  }
+
+  // Total con IVA: algunas facturas muestran como total el neto que YA
+  // restó las retenciones. Si el total leído es exactamente subtotal +
+  // IVA - retenciones, se corrige al total ANTES de retenciones (que es
+  // lo que espera el resto del sistema: asiento, cartera, retenciones).
+  const sinIvaLeido = Number(parsed.valor_sin_iva) || 0;
+  const ivaLeido = Number(parsed.valor_iva) || 0;
+  const conIvaLeido = Number(parsed.valor_con_iva) || 0;
+  const retencionesLeidas = (Number(parsed.rete_fuente) || 0) + (Number(parsed.rete_iva) || 0) + (Number(parsed.rete_ica) || 0);
+  if (sinIvaLeido > 0 && retencionesLeidas > 0 &&
+      Math.abs(sinIvaLeido + ivaLeido - conIvaLeido) > 1 &&
+      Math.abs(sinIvaLeido + ivaLeido - retencionesLeidas - conIvaLeido) <= 1) {
+    parsed.valor_con_iva = sinIvaLeido + ivaLeido;
+    parsed.total_neto_corregido = true;
+  }
 
   // Se marcan aquí (no en llamarGeminiJSON) para que apliquen por igual
   // a un documento suelto y a cada documento de un paquete -- los dos

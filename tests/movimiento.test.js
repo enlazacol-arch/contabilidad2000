@@ -10,6 +10,8 @@ const {
   normalizarNitComparable,
   calcularDvNit,
   nitsCoinciden,
+  limpiarNitLeido,
+  nitTieneTexto,
   clasificarMovimiento,
 } = require('../public/movimiento');
 
@@ -120,4 +122,29 @@ test('clasificarMovimiento: cliente fijo sin coincidencia queda en ese cliente, 
   assert.equal(r.tipoMovimiento, 'egreso');
   assert.equal(r.confiado, false);
   assert.equal(r.motivo, 'cliente_fijo_sin_coincidencia');
+});
+
+// ---------- limpieza de NIT leído ----------
+
+test('limpiarNitLeido: deja solo los dígitos de un NIT con formato', () => {
+  assert.equal(limpiarNitLeido('900.579.294-9'), '900579294');
+  assert.equal(limpiarNitLeido('NIT 71.261.773'), '71261773');
+});
+
+test('limpiarNitLeido: un nombre en el campo NIT queda vacío (caso reportado)', () => {
+  assert.equal(limpiarNitLeido('bosques de la macarena'), '');
+  assert.equal(limpiarNitLeido('Propiedad Horizontal'), '');
+  assert.equal(limpiarNitLeido(''), '');
+  assert.equal(limpiarNitLeido(null), '');
+});
+
+test('limpiarNitLeido: descarta números demasiado cortos o largos para ser NIT', () => {
+  assert.equal(limpiarNitLeido('123'), '');
+  assert.equal(limpiarNitLeido('1234567890123456'), '');
+});
+
+test('nitTieneTexto: detecta un nombre escrito en el campo NIT', () => {
+  assert.equal(nitTieneTexto('bosques de la macarena'), true);
+  assert.equal(nitTieneTexto('900.579.294-9'), false);
+  assert.equal(nitTieneTexto('NIT 900579294'), true);
 });
