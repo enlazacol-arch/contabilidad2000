@@ -375,3 +375,64 @@ test('calcularRetencionSugerida: honorarios con Art. 383 en el documento no sugi
   assert.ok(!sugerido || sugerido.aplicaArticulo383 === true);
   assert.ok(!sugerido || !(sugerido.bajo > 0));
 });
+
+// ---------- AIU con facturas reales (Coraza Seguridad, oct. 2026) ----------
+// La retención de vigilancia es el 2% sobre el AIU, no sobre el total.
+const RA = require('../public/retenciones');
+const PH = { agente_retenedor: true };
+const sugerirConItems = (data) => {
+  data.items = RA.normalizarItemsDesdeIA(data);
+  data.desglose_categorias = RA.desgloseDesdeItems(data.items);
+  data.desglose_aiu = RA.desgloseAiuDesdeItems(data.items);
+  return RA.calcularRetencionSugerida(data, PH, {}, null);
+};
+
+test('AIU: línea "AIU 10%" ya incluida en los servicios no se suma dos veces (Coraza VP18187)', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 23981410, valor_iva: 455646, fecha_factura: '14/07/2026', nit_cc: '900434727',
+    items: [
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 24 HORAS', subtotal: 17148939, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'SERVICIO DE VIGILANCIA PRIVADA 08 HORAS NOCTURNAS', subtotal: 6832470, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU 10 Art 46 Ley 1607 de 2012', subtotal: 2398141, categoria_concepto: 'vigilancia_aseo' },
+    ],
+  };
+  const s = sugerirConItems(data);
+  assert.equal(data.items.length, 2);
+  assert.equal(s.bajo, 47963); // 2% x 2.398.141 (antes: 52.759)
+});
+
+test('AIU: valor imposible leído por la IA se descarta y se deduce del IVA (Coraza VP17983)', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 23330941, valor_iva: 443288, fecha_factura: '16/06/2026', nit_cc: '900434727',
+    items: [
+      { descripcion: '24 HORAS EN PORTERIA PERMANENTES', subtotal: 16683793, categoria_concepto: 'vigilancia_aseo', aiu: 15015414 },
+      { descripcion: '08 HORAS NOCTURNAS EN RONDA', subtotal: 6647147, categoria_concepto: 'vigilancia_aseo', aiu: 5982432 },
+    ],
+  };
+  const s = sugerirConItems(data);
+  assert.equal(data.items[0].aiu_origen, 'iva');
+  assert.equal(s.bajo, 46662); // 2% x (443.288 / 19%) (antes: 419.957)
+});
+
+test('AIU: una línea de AIU que sí suma al subtotal se conserva (Limpieza y Soluciones)', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 11915111, valor_iva: 205806, fecha_factura: '10/07/2026', nit_cc: '900937794',
+    items: [
+      { descripcion: 'SERVICIO INTEGRAL DE ASEO Y CAFETERIA', subtotal: 10831919, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU (Servicio Aseo)', subtotal: 1083192, categoria_concepto: 'vigilancia_aseo' },
+    ],
+  };
+  RA.normalizarItemsDesdeIA(data);
+  const items = RA.normalizarItemsDesdeIA(data);
+  assert.equal(items.length, 2);
+  assert.equal(items[1].aiu, '1083192');
+});
+
+test('AIU: no se deduce del IVA si el IVA es sobre todo el valor', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '10/07/2026',
+    items: [{ descripcion: 'Servicio de aseo', subtotal: 1000000, categoria_concepto: 'vigilancia_aseo' }],
+  };
+  const items = RA.normalizarItemsDesdeIA(data);
+  assert.equal(items[0].aiu, '');
+});

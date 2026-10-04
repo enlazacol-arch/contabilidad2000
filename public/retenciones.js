@@ -786,6 +786,76 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   };
 }
 
+// ---------- AIU consolidado (vigilancia, aseo, temporales) ----------
+//
+// La retención de estos servicios es el 2%/1% sobre el AIU, no sobre el
+// total. Probado con facturas reales de Coraza Seguridad (oct. 2026), la
+// lectura fallaba de tres formas, y esta función corrige las tres:
+//
+// 1. AIU imposible: la IA a veces llena el AIU de una línea con casi
+//    todo su valor. Un AIU real es una fracción pequeña (piso legal 10%);
+//    si supera el 50% de la línea, se descarta.
+// 2. Línea "AIU" informativa: algunas facturas listan el AIU como una
+//    línea aparte aunque YA está incluido en los servicios. Si la suma de
+//    ítems sin esa línea da el subtotal de la factura, la línea se quita
+//    de los ítems (si no, se contaría dos veces) y su valor queda como el
+//    AIU de esa categoría. Si la línea SÍ es parte del subtotal, se deja
+//    (autoCompletarAiuDesdeDescripcion ya la marca como AIU).
+// 3. AIU deducible del IVA: en estos servicios el IVA se cobra solo sobre
+//    el AIU (Art. 462-1 ET). Si nadie trajo el AIU, la factura es de una
+//    sola categoría con base AIU y el IVA es claramente menor al 19% del
+//    subtotal, el AIU = IVA / 19%. Queda marcado con aiu_origen = 'iva'
+//    para que la pantalla lo pueda explicar.
+//
+// Muta y devuelve el arreglo de ítems. Nunca pisa un AIU que el contador
+// ya escribió (se llama solo al normalizar lo que leyó la IA).
+const ES_LINEA_AIU = /\baiu\b|administraci[oó]n[\s,]+imprevistos|imprevistos[\s,y]+utilidad/i;
+const IVA_GENERAL = 0.19;
+
+function consolidarAiuEnItems(items, data) {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  const datos = data || {};
+
+  // 1) AIU imposible
+  items.forEach((it) => {
+    if (!esCategoriaBaseAiu(it.categoria_concepto) || ES_LINEA_AIU.test(String(it.descripcion || ''))) return;
+    const aiu = Number(it.aiu);
+    const subtotal = Number(it.subtotal) || 0;
+    if (it.aiu !== '' && it.aiu !== undefined && aiu > subtotal * 0.5) it.aiu = '';
+  });
+
+  // 2) Línea "AIU" informativa (ya incluida en los servicios)
+  const subtotalFactura = Number(datos.valor_sin_iva) || 0;
+  if (subtotalFactura > 0) {
+    const sumaItems = items.reduce((t, it) => t + (Number(it.subtotal) || 0), 0);
+    const tolerancia = Math.max(2, subtotalFactura * 0.005);
+    for (let i = items.length - 1; i >= 0; i--) {
+      const linea = items[i];
+      if (!esCategoriaBaseAiu(linea.categoria_concepto) || !ES_LINEA_AIU.test(String(linea.descripcion || ''))) continue;
+      const valorLinea = Number(linea.subtotal) || 0;
+      if (valorLinea <= 0 || Math.abs(sumaItems - valorLinea - subtotalFactura) > tolerancia) continue;
+      const destino = items.find((it, j) => j !== i && it.categoria_concepto === linea.categoria_concepto);
+      if (!destino) continue;
+      items.splice(i, 1);
+      if (destino.aiu === '' || destino.aiu === undefined || destino.aiu === null) {
+        destino.aiu = String(valorLinea);
+        destino.aiu_origen = 'linea_aiu';
+      }
+    }
+  }
+
+  // 3) AIU deducido del IVA
+  const ivaFactura = Number(datos.valor_iva) || 0;
+  const categorias = [...new Set(items.map((it) => String(it.categoria_concepto || '')))];
+  const sinAiu = items.every((it) => it.aiu === '' || it.aiu === undefined || it.aiu === null);
+  if (categorias.length === 1 && esCategoriaBaseAiu(categorias[0]) && sinAiu && ivaFactura > 0 && subtotalFactura > 0 &&
+      ivaFactura < subtotalFactura * IVA_GENERAL * 0.5) {
+    items[0].aiu = String(Math.round(ivaFactura / IVA_GENERAL));
+    items[0].aiu_origen = 'iva';
+  }
+  return items;
+}
+
 // ---------- Normalización de ítems leídos por la IA (Fase 4) ----------
 //
 // La IA devuelve `items` como un arreglo crudo (a veces como texto JSON
@@ -833,7 +903,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
 
   if (!Array.isArray(raw) || raw.length === 0) {
     const categoria = validarCategoria((data.categoria_concepto || 'otro').toLowerCase());
-    return autoCompletarAiuDesdeDescripcion([{
+    return consolidarAiuEnItems(autoCompletarAiuDesdeDescripcion([{
       descripcion: data.concepto || '',
       cantidad: '', valor_unitario: '',
       subtotal: String(data.valor_sin_iva ?? '0'),
@@ -847,9 +917,9 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       // simplemente no se usa. Vacío = "no se sabe todavía", nunca 0 a
       // propósito (0 sí sería un valor real, aunque poco común).
       aiu: data.valor_aiu !== undefined && data.valor_aiu !== null && data.valor_aiu !== '' ? String(data.valor_aiu) : '',
-    }]);
+    }]), data);
   }
-  return autoCompletarAiuDesdeDescripcion(raw.map((it) => {
+  return consolidarAiuEnItems(autoCompletarAiuDesdeDescripcion(raw.map((it) => {
     const categoria = validarCategoria(String(it.categoria_concepto || 'otro').toLowerCase());
     return {
       descripcion: it.descripcion || '',
@@ -862,7 +932,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       iva_mayor_valor: false,
       aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
     };
-  }));
+  })), data);
 }
 
 // Opciones de tarifa (%) seleccionables para UNA categoría, para el
@@ -1237,6 +1307,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RETEIVA_TARIFA_GENERAL,
     esCategoriaBaseAiu,
     autoCompletarAiuDesdeDescripcion,
+    consolidarAiuEnItems,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,
     montoCategoriaEnFactura,
