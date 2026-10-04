@@ -372,6 +372,15 @@ const CATEGORIA_CONCEPTO_LABELS = {
 // agente_retencion_iva } -- o null/undefined si el contador nunca
 // marcó nada para ese NIT (en ese caso, se cae de vuelta a lo que la
 // IA leyó en el documento, como antes).
+// NITs que en el año ya pidieron el Art. 383 en algún documento guardado
+// (ver /api/articulo-383-por-nit). Si una cuenta de cobro de ese
+// proveedor lo pidió, las demás del mismo año también lo aplican, aunque
+// la IA no lo detecte en cada documento (pasó con 1 de 7 de IMB).
+let NITS_ARTICULO_383 = new Set();
+function registrarNitsArticulo383(lista) {
+  NITS_ARTICULO_383 = new Set((Array.isArray(lista) ? lista : []).map((n) => String(n).replace(/[^0-9]/g, '')));
+}
+
 function esNitPersonaJuridica(nit) {
   const digitos = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
   return /^[89]\d{8}$/.test(digitos);
@@ -406,7 +415,8 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // trabajadores (inv.solicita_articulo_383). Ver el comentario junto a
   // esta bandera en calcularRetencionCategoriaLinea() más abajo.
   const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
-    inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true';
+    inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true' ||
+    NITS_ARTICULO_383.has(String(inv.nit_cc || '').replace(/-\s*\d$/, '').replace(/[^0-9]/g, ''));
   return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
 }
 
@@ -1366,6 +1376,7 @@ if (typeof module !== 'undefined' && module.exports) {
     umbralPesos,
     perfilFiscalEfectivo,
     esNitPersonaJuridica,
+    registrarNitsArticulo383,
     calcularRetencionCategoriaLinea,
     calcularRetencionSugerida,
     calcularRetencionSugeridaPorItems,

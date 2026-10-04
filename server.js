@@ -2082,6 +2082,27 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
 // facturas de egreso ya aprobadas -- Escanear y Carga masiva la usan
 // como subcuenta preseleccionada (ver subcuentaAprendida() en
 // public/retenciones.js). Clave: "NIT|categoria".
+// NITs que este año ya tienen alguna factura guardada en la que el
+// documento pedía aplicar la tabla del Art. 383 -- ver
+// registrarNitsArticulo383() en public/retenciones.js.
+app.get('/api/articulo-383-por-nit', requireAuth, async (req, res) => {
+  try {
+    const anio = String(new Date().getFullYear());
+    const { rows } = await pool.query(
+      `SELECT DISTINCT nit_cc, cliente_id FROM invoices
+        WHERE contador_id = $1 AND solicita_articulo_383 = true AND nit_cc <> '' AND RIGHT(fecha_factura, 4) = $2`,
+      [req.firmaId, anio]
+    );
+    const nits = [...new Set(rows
+      .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
+      .map((r) => normalizarNit(r.nit_cc)))];
+    res.json(nits);
+  } catch (err) {
+    console.error('Error leyendo NITs con Art. 383:', err);
+    res.status(500).json({ error: 'No se pudieron leer los NIT con Art. 383.' });
+  }
+});
+
 app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(

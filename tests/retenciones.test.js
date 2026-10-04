@@ -469,3 +469,11 @@ test('compras a persona jurídica: tarifa exacta de declarante (GAMOEZ)', () => 
   assert.equal(s.mismaTarifa, true);
   assert.equal(s.bajo, 15488); // 2,5% (antes rango 15.488 - 21.684)
 });
+
+test('Art. 383 por proveedor: si el NIT ya lo pidió este año, aplica aunque este documento no lo diga (IMB)', () => {
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 280000, nit_cc: '71261773', fecha_factura: '17/07/2026' };
+  assert.equal(!!RA.calcularRetencionSugerida(inv, PH, {}, null).aplicaArticulo383, false);
+  RA.registrarNitsArticulo383(['71261773']);
+  assert.equal(RA.calcularRetencionSugerida(inv, PH, {}, null).aplicaArticulo383, true);
+  RA.registrarNitsArticulo383([]);
+});

@@ -2551,6 +2551,8 @@ async function requireAuthAndInit(){
     try {
       const subRes = await fetch('/api/subcuentas-aprendidas');
       if (subRes.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await subRes.json());
+      const res383 = await fetch('/api/articulo-383-por-nit');
+      if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
     } catch (e) {
       console.warn('No se pudieron cargar las subcuentas aprendidas:', e.message);
     }
