@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <script src="/estadisticas.js"></script>
 <script src="/retenciones.js"></script>
@@ -42,8 +43,13 @@
     padding:3px 9px; border-radius:var(--r-pill); background:var(--moss-soft); color:#fff; white-space:nowrap;
   }
   .cliente-header-actions{ display:flex; flex-direction:row; flex-wrap:wrap; gap:10px; align-items:stretch; flex-shrink:0; }
-  .cliente-header-actions .btn{ text-align:center; white-space:nowrap; text-decoration:none; display:inline-block; }
-  .btn-escanear-grande{ padding:18px 28px; font-size:var(--t-16); font-weight:700; }
+  .cliente-header-actions .btn{ text-align:center; white-space:nowrap; text-decoration:none; }
+  .btn-escanear-grande{ min-height:52px; padding:var(--s-3) var(--s-6); font-size:var(--t-16); font-weight:700; }
+  @media (max-width:600px){
+    .cliente-header-actions{ flex:1 1 100%; flex-direction:column; }
+    .cliente-header-actions .btn{ white-space:normal; width:100%; }
+    .cliente-header{ padding:var(--s-4); }
+  }
 
   .cliente-quick-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
   .quick-action-btn{
