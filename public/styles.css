@@ -833,3 +833,120 @@ footer{
   body{ background:#fff; }
   .wrap{ max-width:none; padding:0; }
 }
+
+/* =====================================================================
+   7. Componentes compartidos de las páginas de un cliente
+   (ficha, ingresos, egresos, balance, kárdex, cartera, retenciones,
+   auditoría…). Antes cada página tenía su propia copia; ahora viven aquí.
+   ===================================================================== */
+
+/* ---------- barra del cliente (menú por cliente) ----------
+   Dos estructuras: con .ctb-head + .ctb-links (la mayoría de páginas)
+   o con los enlaces sueltos (ficha del cliente). */
+.client-tabbar{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:var(--s-3) var(--s-4) var(--s-4); margin-bottom:var(--s-5); box-shadow:var(--sh-1);
+}
+.client-tabbar:not(:has(.ctb-head)){
+  display:flex; align-items:center; gap:var(--s-1); flex-wrap:wrap;
+  padding:var(--s-1); margin-bottom:var(--s-6);
+}
+.client-tabbar .ctb-head{
+  display:flex; align-items:baseline; gap:var(--s-2); flex-wrap:wrap; margin-bottom:var(--s-3); min-width:0;
+}
+.client-tabbar .ctb-cliente-label{
+  font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--text-3);
+}
+.client-tabbar .ctb-cliente-nombre{
+  font-family:var(--font-display); font-weight:700; font-size:var(--t-18); color:var(--text); margin-right:auto;
+  min-width:0; overflow-wrap:anywhere;
+}
+.client-tabbar .ctb-exit{
+  font-family:var(--font-ui); font-size:var(--t-13); font-weight:600; color:var(--pet-600); text-decoration:none; white-space:nowrap;
+}
+.client-tabbar .ctb-exit:hover{ color:var(--pet-800); text-decoration:underline; }
+.client-tabbar .ctb-links{ display:flex; align-items:center; gap:var(--s-1); flex-wrap:wrap; }
+.client-tabbar .ctb-links a,
+.client-tabbar > a{
+  display:inline-flex; align-items:center; gap:6px;
+  min-height:36px;
+  font-family:var(--font-ui); font-size:var(--t-13); font-weight:600;
+  color:var(--text-2); text-decoration:none; padding:var(--s-1) var(--s-3);
+  border:1px solid transparent; border-radius:var(--r-sm);
+  transition:background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  white-space:nowrap;
+}
+.client-tabbar .ctb-links a:hover,
+.client-tabbar > a:hover{ color:var(--text); background:var(--surface-sunken); }
+.client-tabbar .ctb-links a.active,
+.client-tabbar > a.active{ background:var(--pet-600); color:#fff; }
+.client-tabbar .ctb-divider{ width:1px; height:20px; background:var(--border); margin:0 var(--s-1); flex-shrink:0; }
+@media (max-width:600px){
+  .client-tabbar .ctb-links, .client-tabbar:not(:has(.ctb-head)){
+    flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+    margin-inline:calc(-1 * var(--s-1));
+  }
+  .client-tabbar .ctb-links::-webkit-scrollbar, .client-tabbar:not(:has(.ctb-head))::-webkit-scrollbar{ display:none; }
+  .client-tabbar .ctb-links a, .client-tabbar > a{ min-height:40px; }
+}
+
+/* ---------- tarjetas de indicadores ---------- */
+.stat-cards{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap:var(--s-4); margin-bottom:var(--s-6); }
+.stat-card{
+  position:relative;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:var(--s-5); box-shadow:var(--sh-1); min-width:0;
+}
+.stat-card.ingresos, .stat-card.egresos, .stat-card.balance{ border-top:3px solid var(--border); }
+.stat-card.ingresos{ border-top-color:var(--ingreso-fill); }
+.stat-card.egresos{ border-top-color:var(--egreso-fill); }
+.stat-card.balance{ border-top-color:var(--pet-600); }
+.stat-card .label{
+  font-family:var(--font-ui); font-size:var(--t-12); font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--text-3);
+}
+.stat-card .value{
+  font-family:var(--font-num); font-variant-numeric:tabular-nums;
+  font-weight:700; font-size:var(--t-24); letter-spacing:-0.01em; line-height:var(--lh-tight);
+  color:var(--text); margin-top:var(--s-2); overflow-wrap:anywhere;
+}
+.stat-card.ingresos .value, .stat-card .value.positivo{ color:var(--ingreso); }
+.stat-card.egresos .value, .stat-card .value.negativo{ color:var(--egreso); }
+.stat-card .sub, .stat-card .hint{ font-size:var(--t-12); color:var(--text-3); margin-top:var(--s-1); }
+
+/* ---------- tarjeta de gráfica / bloque con título ---------- */
+.chart-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:var(--s-5) var(--s-6); margin-bottom:var(--s-5); box-shadow:var(--sh-1); min-width:0;
+}
+.chart-card .card-head{
+  display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--s-3); margin-bottom:var(--s-4);
+}
+.chart-card h2{ font-family:var(--font-display); font-size:var(--t-18); font-weight:700; margin:0 0 var(--s-4); color:var(--text); }
+.chart-card .card-head h2{ margin:0; }
+.chart-card .ver-todas{
+  font-family:var(--font-ui); font-size:var(--t-13); font-weight:600; color:var(--pet-600); text-decoration:none;
+}
+.chart-card .ver-todas:hover{ color:var(--pet-800); text-decoration:underline; }
+.chart-wrap{ position:relative; height:300px; }
+@media (max-width:600px){
+  .chart-card{ padding:var(--s-4); }
+  .chart-wrap{ height:240px; }
+}
+
+/* ---------- insignia de movimiento (ingreso / egreso) ---------- */
+.mov-badge{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--font-ui); font-size:var(--t-12); font-weight:600;
+  padding:2px 10px; border-radius:var(--r-pill); white-space:nowrap;
+}
+.mov-badge.egreso{ background:var(--egreso-bg); color:var(--egreso); }
+.mov-badge.ingreso{ background:var(--ingreso-bg); color:var(--ingreso); }
+.mov-badge .mov-dot{ width:6px; height:6px; border-radius:50%; background:currentColor; }
+
+/* ---------- nota de vacío dentro de un bloque ---------- */
+.empty-note{
+  font-family:var(--font-ui); font-size:var(--t-14); color:var(--text-2);
+  padding:var(--s-8) var(--s-4); text-align:center;
+}

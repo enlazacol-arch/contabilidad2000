@@ -377,38 +377,6 @@
      campo ya leído. */
   #movStatus{ margin:14px 0; display:none; }
   #movStatus.show{ display:block; animation:fadeUp .4s var(--ease) forwards; }
-  /* Aviso de que ya se viene con un cliente fijo -- porque se eligió
-     antes desde la ficha de ese cliente en Inicio. Mientras esté
-     visible, la detección automática de cliente (por NIT) no busca
-     entre todos los clientes: solo confirma si esta factura es un
-     ingreso o un egreso PARA este cliente en concreto. */
-  .client-tabbar{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
-    padding:14px 18px 16px; margin-bottom:20px;
-  }
-  .client-tabbar .ctb-head{
-    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
-  }
-  .client-tabbar .ctb-cliente-label{
-    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.05em;
-    color:var(--ink-faint);
-  }
-  .client-tabbar .ctb-cliente-nombre{
-    font-family:var(--font-display); font-weight:800; font-size:var(--t-16); color:var(--ink); margin-right:auto;
-  }
-  .client-tabbar .ctb-exit{
-    font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); text-decoration:none; white-space:nowrap;
-  }
-  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
-  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
-  .client-tabbar .ctb-links a{
-    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.03em;
-    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:var(--r-pill);
-    transition:all .15s ease; white-space:nowrap;
-  }
-  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
-  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
-  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 
   .mov-confirmed{
     display:flex; align-items:center; gap:var(--s-3);
@@ -1015,7 +983,6 @@ async function requireAuthAndInit(){
   }
 }
 requireAuthAndInit();
-
 
 const movStatusEl = document.getElementById('movStatus');
 

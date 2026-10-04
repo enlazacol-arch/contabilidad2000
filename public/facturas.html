@@ -53,15 +53,6 @@
   .total-chip.balance{ color:var(--text-2); background:var(--surface-sunken); }
   .total-chip.balance b{ color:var(--text); }
 
-  .mov-badge{
-    display:inline-flex; align-items:center; gap:6px;
-    font-family:var(--font-ui); font-size:var(--t-12); font-weight:600;
-    padding:2px 10px; border-radius:var(--r-pill); white-space:nowrap;
-  }
-  .mov-badge.egreso{ background:var(--egreso-bg); color:var(--egreso); }
-  .mov-badge.ingreso{ background:var(--ingreso-bg); color:var(--ingreso); }
-  .mov-badge .mov-dot{ width:6px; height:6px; border-radius:50%; background:currentColor; }
-
   /* Factura guardada pero todavía sin aprobar en Revisión (borrador) --
      queda fuera de los totales hasta que se apruebe. */
   .borrador-badge{
@@ -286,34 +277,6 @@
   }
   .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--pet-200);border-top-color:var(--pet-600);animation:spin .7s linear infinite;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
-
-  .client-tabbar{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
-    padding:14px 18px 16px; margin-bottom:20px; box-shadow:var(--shadow-sm);
-  }
-  .client-tabbar .ctb-head{
-    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
-  }
-  .client-tabbar .ctb-cliente-label{
-    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.05em;
-    color:var(--ink-faint);
-  }
-  .client-tabbar .ctb-cliente-nombre{
-    font-family:var(--font-display); font-weight:800; font-size:var(--t-16); color:var(--ink); margin-right:auto;
-  }
-  .client-tabbar .ctb-exit{
-    font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); text-decoration:none; white-space:nowrap;
-  }
-  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
-  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
-  .client-tabbar .ctb-links a{
-    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.03em;
-    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:var(--r-pill);
-    transition:all .15s ease; white-space:nowrap;
-  }
-  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
-  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
-  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 
   @media (max-width:760px){
     thead th:nth-child(3), tbody td:nth-child(3){ display:none; } /* Concepto */
