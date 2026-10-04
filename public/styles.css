@@ -684,6 +684,19 @@ footer{
   font-size:var(--t-12); font-weight:700; letter-spacing:.04em; margin-right:6px;
 }
 
+/* Ventanas emergentes: mientras una está abierta, la página de atrás
+   no se desplaza, y al llegar al final del contenido de la ventana el
+   scroll no "salta" al fondo (reporte de revisión contable, oct. 2026). */
+html:has(.file-modal.show, .modal-doc.show, .modal-plantilla.show, .modal-validacion.show, .overlay-clientes.show),
+html:has(.file-modal.show, .modal-doc.show, .modal-plantilla.show, .modal-validacion.show, .overlay-clientes.show) body{
+  overflow:hidden;
+}
+.file-modal, .file-modal-content, #modalDatos,
+.modal-doc, .modal-plantilla, .modal-validacion, .overlay-clientes,
+.modal-backdrop, .modal{
+  overscroll-behavior:contain;
+}
+
 /* =====================================================================
    6. Utilidades, celular y movimiento reducido
    ===================================================================== */
