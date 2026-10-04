@@ -6,16 +6,17 @@
 <title>Enlaza — Iniciar sesión</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
 <script src="/config.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="stylesheet" href="/tokens.css">
 <style>
   :root{
-    --paper:#F6FAFC; --paper-raised:#FFFFFF; --line:#DCE7EC;
-    --ink:#1D2A32; --ink-soft:#4A5E68; --ink-faint:#8AA0AC;
-    --petroleo:#0B4F6C; --petroleo-deep:#083A4F;
-    --coral:#FF6B4A; --coral-deep:#E0512F;
-    --ember:#FF5A36; --ember-deep:#D8431F; --moss:#5B8072; --clay:#AA6B5C;
+    --paper:var(--n-50); --paper-raised:#FFFFFF; --line:var(--n-200);
+    --ink:var(--n-900); --ink-soft:var(--n-700); --ink-faint:var(--n-500);
+    --petroleo:var(--pet-600); --petroleo-deep:var(--pet-800);
+    --coral:var(--coral-600); --coral-deep:var(--coral-700);
+    --ember:var(--egreso-fill); --ember-deep:var(--egreso); --moss:var(--ingreso-fill); --clay:var(--clay);
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;}
@@ -24,9 +25,9 @@
     background-image:
       radial-gradient(900px 460px at -5% -10%, rgba(11,79,108,0.08), transparent 55%),
       radial-gradient(800px 440px at 105% 10%, rgba(255,107,74,0.06), transparent 55%),
-      radial-gradient(700px 400px at 50% 115%, rgba(91,128,114,0.07), transparent 55%);
+      radial-gradient(700px 400px at 50% 115%, rgba(11,79,108,0.05), transparent 55%);
     color:var(--ink);
-    font-family:'Inter',-apple-system,sans-serif;
+    font-family:var(--font-ui);
     display:flex; align-items:center; justify-content:center;
     min-height:100vh; padding:20px;
   }
@@ -34,22 +35,23 @@
   .mascot-login{
     display:block; width:112px; margin:0 auto -46px; position:relative; z-index:2;
     filter:drop-shadow(0 14px 20px rgba(11,79,108,0.18));
-    animation:mascotFloat 3.6s ease-in-out infinite;
+    animation:mascotFloat 5s ease-in-out infinite;
   }
   @keyframes mascotFloat{
-    0%,100%{ transform:translateY(0) rotate(-2deg); }
-    50%{ transform:translateY(-9px) rotate(2deg); }
+    0%,100%{ transform:translateY(0) rotate(-1.5deg); }
+    50%{ transform:translateY(-6px) rotate(1.5deg); }
   }
+  @media (prefers-reduced-motion:reduce){ .mascot-login{ animation:none; } }
   .card{
     width:100%; text-align:center;
     background:var(--paper-raised); border:1px solid var(--line);
     border-top:4px solid var(--petroleo);
-    border-radius:16px; padding:54px 34px 44px;
-    box-shadow:0 30px 60px -28px rgba(13,30,40,0.22);
+    border-radius:var(--r-lg); padding:var(--s-12) var(--s-8) var(--s-10);
+    box-shadow:var(--sh-3);
     position:relative;
   }
   .logo-mark{
-    width:48px; height:48px; border-radius:12px; margin:0 auto 20px;
+    width:48px; height:48px; border-radius:var(--r-md); margin:0 auto 20px;
     background:#fff; border:1px solid var(--line);
     display:flex; align-items:center; justify-content:center;
     box-shadow:0 10px 22px -8px rgba(11,79,108,0.25);
@@ -57,23 +59,25 @@
   .logo-mark svg,
   .logo-mark img{ width:32px; height:32px; display:block; object-fit:contain; }
   h1{
-    font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
-    font-size:1.7rem; margin:0 0 10px;
+    font-family:var(--font-display); font-weight:800; letter-spacing:-0.02em;
+    font-size:var(--t-30); line-height:var(--lh-tight); margin:0 0 var(--s-2); color:var(--text);
   }
-  p{ color:var(--ink-soft); font-size:14px; line-height:1.6; margin:0 0 30px; }
+  p{ color:var(--ink-soft); font-size:var(--t-16); line-height:1.55; margin:0 0 var(--s-8); text-wrap:pretty; }
   #googleBtn{ display:flex; justify-content:center; }
   #errBox{
-    display:none; margin-top:18px; font-size:12.5px; color:var(--coral-deep);
-    background:var(--coral-tint, rgba(255,107,74,0.1)); border:1px solid rgba(255,107,74,0.3);
-    padding:10px 14px; border-radius:8px;
+    display:none; margin-top:var(--s-4); font-size:var(--t-14); color:var(--err);
+    background:var(--err-bg); border:1px solid var(--err-line);
+    padding:var(--s-3) var(--s-4); border-radius:var(--r-md); text-align:left;
   }
   #errBox.show{ display:block; }
   .fine{
-    margin-top:26px; font-family:'JetBrains Mono',monospace; font-size:10.5px;
-    color:var(--ink-faint); letter-spacing:.03em; line-height:1.6;
+    margin-top:var(--s-8); padding-top:var(--s-5); border-top:1px solid var(--line);
+    font-family:var(--font-ui); font-size:var(--t-13);
+    color:var(--ink-faint); line-height:1.6;
   }
-  .fine a{ color:var(--ink-faint); text-decoration:underline; }
-  .fine a:hover{ color:var(--petroleo); }
+  .fine a{ color:var(--petroleo); text-decoration:underline; text-underline-offset:2px; }
+  .fine a:hover{ color:var(--petroleo-deep); }
+  @media (max-width:420px){ .card{ padding:var(--s-12) var(--s-5) var(--s-8); } }
 </style>
 </head>
 <body>

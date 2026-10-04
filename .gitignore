@@ -2,3 +2,6 @@ node_modules/
 .env
 .DS_Store
 npm-debug.log*
+
+# Copias de conflicto de OneDrive/iCloud (ej. "escanear-MacBook de David.html")
+*-MacBook de David*

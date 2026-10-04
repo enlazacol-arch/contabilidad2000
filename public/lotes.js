@@ -242,7 +242,14 @@ async function guardarResultadoDocumento(itemId, contadorId, doc) {
     return;
   }
 
-  const deteccion = await detectarClienteYMovimientoServidor(contadorId, parsed);
+  // Si el lote se subió desde la ficha de un cliente, la detección solo
+  // decide para ese cliente (ver detectarClienteYMovimientoServidor).
+  const { rows: loteRows } = await pool.query(
+    `SELECT l.cliente_id FROM lote_items i JOIN lotes_procesamiento l ON l.id = i.lote_id WHERE i.id = $1`,
+    [itemId]
+  );
+  const clienteFijoId = loteRows.length > 0 ? loteRows[0].cliente_id : null;
+  const deteccion = await detectarClienteYMovimientoServidor(contadorId, parsed, clienteFijoId);
   await pool.query(
     `UPDATE lote_items SET estado = $2, data = $3, cliente_id_detectado = $4, tipo_movimiento_detectado = $5 WHERE id = $1`,
     [itemId, deteccion.confiado ? 'listo' : 'revisar', JSON.stringify(parsed), deteccion.clienteId || null, deteccion.tipoMovimiento]

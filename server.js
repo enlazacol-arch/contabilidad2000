@@ -17,6 +17,8 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 // Motor contable mínimo (PUC + asientos de partida doble) -- ver
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
+// Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
+const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto } = require('./public/movimiento');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -161,6 +163,8 @@ async function ensureSchema() {
   // debe practicar retención en la fuente ni ReteICA sobre esa factura
   // (ver perfilFiscalEfectivo() en public/retenciones.js).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor BOOLEAN DEFAULT false;`);
+  // El documento pide aplicar la tabla del art. 383 ET (lo detecta la IA).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS solicita_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
   // Número de digitación/comprobante -- lo escribe el contador cuando YA
   // registró esta factura en su propio software contable (Siigo, Alegra,
   // World Office, etc.). Mientras esté vacío, la factura se puede seguir
@@ -446,6 +450,13 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_terceros_fiscales_contador ON terceros_fiscales (contador_id);`);
+  // Art. 383 ET (rentas de trabajo) es un régimen EXCLUYENTE con
+  // honorarios/servicios (4%/6%/10%/11%, Concepto DIAN 752 de 2023) --
+  // el contador marca esto por NIT cuando el independiente certificó que
+  // no contrató 2+ personas para la actividad por 90+ días en el año.
+  // Ver calcularRetencionCategoriaLinea() en retenciones.js, que es
+  // donde esta marca deja de sugerir la tarifa fija.
+  await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS aplica_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
 
   // PUC personalizado por cliente -- algunos contadores llevan la
   // contabilidad de un cliente puntual en OTRO sistema (ej. Contaia) que
@@ -1562,7 +1573,7 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
+  'regimen_simple', 'autorretenedor', 'solicita_articulo_383', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
   'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
   'confianza_campos', 'modelo_ia', 'version_prompt', 'valor_letras_texto', 'valor_letras_numero',
   'archivo_original', 'archivo_original_tipo',
@@ -2215,6 +2226,18 @@ app.get('/api/acumulado-categoria', requireAuth, async (req, res) => {
 // Guardar una factura ya revisada por el contador
 app.post('/api/invoices', requireAuth, async (req, res) => {
   try {
+    // Un NIT con un nombre escrito por error (ej. "bosques de la
+    // macarena") no se guarda: después no había cómo corregirlo. Si
+    // trae puntos, guiones o espacios, se guarda solo con los dígitos.
+    for (const [campoNit, etiqueta] of [['nit_cc', 'del emisor'], ['adquiriente_nit', 'del comprador']]) {
+      const valor = req.body[campoNit];
+      if (!valor) continue;
+      const limpio = limpiarNitLeido(valor);
+      if (!limpio && nitTieneTexto(valor)) {
+        return res.status(400).json({ error: `El NIT ${etiqueta} tiene texto ("${String(valor).slice(0, 40)}"). Escribe solo los números del NIT, o déjalo vacío si el documento no lo trae.` });
+      }
+      if (limpio) req.body[campoNit] = limpio;
+    }
     // cliente_id viene del navegador -- si trae uno, hay que confirmar
     // que sea un cliente de ESTE contador antes de guardarlo. Sin este
     // chequeo, cualquiera podría mandar el id de un cliente ajeno (por
@@ -2282,7 +2305,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       // tarifa_ica_id es de tipo UUID igual que cliente_id -- mismo tratamiento.
       if (key === 'tarifa_ica_id') return val === '' ? null : val;
       // Estos campos son de tipo BOOLEAN -- convertir explícitamente.
-      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
+      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'solicita_articulo_383' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
         return val === true || val === 'true';
       }
       // confianza_campos es un objeto {campo: 0-1} -- se guarda como TEXT
@@ -2421,13 +2444,16 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 // tipo_doc/tipo_movimiento/cliente_id/file_hash y similares (cambiarlos
 // después de guardada abriría más problemas de los que resuelve; para
 // eso existe borrar y volver a escanear).
-// A propósito deja AFUERA nit_cc y nombre_razon_social -- identifican
-// quién emitió el documento (dato del documento físico, no una
-// clasificación que el contador decide), y dejarlos editables podría
-// reasignar sin querer una factura a otro tercero, desalineando tarifas
-// ya aprendidas para ese proveedor y la trazabilidad fiscal del
-// documento. Si esos dos datos quedaron mal leídos, la salida es borrar
-// la factura y volver a escanearla/digitarla -- no corregirlos acá.
+// A propósito deja AFUERA nit_cc y nombre_razon_social de ESTE PUT
+// genérico -- identifican quién emitió el documento (dato del documento
+// físico, no una clasificación que el contador decide), y dejarlos
+// editables en silencio acá podría reasignar sin querer una factura a
+// otro tercero. Para el caso real de un NIT mal leído o mal digitado
+// (ej. el contador escribió el nombre por error en el campo NIT), existe
+// el endpoint aparte y deliberado PATCH /api/invoices/:id/nit (ver más
+// abajo) -- no este PUT. Si lo que quedó mal es otra cosa (ej. se leyó
+// el documento de otro proveedor por completo), la salida sigue siendo
+// borrar la factura y volver a escanearla/digitarla.
 const CAMPOS_EDITABLES_FACTURA = [
   'dv', 'fecha_factura', 'concepto',
   'categoria_concepto', 'subcuenta_gasto',
@@ -2602,6 +2628,57 @@ app.patch('/api/invoices/:id/tipo-movimiento', requireAuth, requireRole('adminis
   } catch (err) {
     console.error('Error corrigiendo tipo_movimiento:', err);
     res.status(500).json({ error: 'No se pudo corregir el tipo de movimiento.' });
+  }
+});
+
+// Igual criterio que el endpoint de arriba (/tipo-movimiento) -- corregir
+// el NIT/cédula o el nombre del proveedor después de guardada la factura
+// es una acción APARTE y deliberada, nunca un campo más del PUT genérico
+// de abajo (ver el comentario de CAMPOS_EDITABLES_FACTURA). A diferencia
+// de tipo_movimiento, nit_cc/nombre_razon_social no tienen ninguna
+// cascada que deshacer: el asiento contable no depende del NIT, y las
+// tarifas ya aprendidas (tarifa_proveedor_aprendida) viven en su propia
+// tabla por NIT + categoría -- no referencian la factura, así que
+// corregir el NIT acá no las mueve ni las rompe. El único cuidado real
+// es no dejar que se repita el error que originó este endpoint: exige
+// que nit_cc quede solo con dígitos (o vacío, para el caso real de un
+// documento que de verdad no trae NIT) -- nunca un nombre ni texto
+// suelto escrito ahí por accidente.
+app.patch('/api/invoices/:id/nit', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const nuevoNit = String(req.body.nit_cc ?? '').trim();
+    if (nuevoNit !== '' && !/^\d+$/.test(nuevoNit)) {
+      return res.status(400).json({ error: 'El NIT/cédula solo puede tener dígitos (sin letras, puntos ni guiones) -- si el documento de verdad no trae uno legible, déjalo vacío.' });
+    }
+    const nuevoNombreCrudo = req.body.nombre_razon_social;
+    const nuevoNombre = nuevoNombreCrudo !== undefined ? String(nuevoNombreCrudo).trim() : undefined;
+    if (nuevoNombre !== undefined && nuevoNombre === '') {
+      return res.status(400).json({ error: 'El nombre/razón social no puede quedar vacío.' });
+    }
+
+    const previa = await pool.query('SELECT id, cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (previa.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
+    if (req.clientesAsignados && !puedeAccederCliente(req, previa.rows[0].cliente_id)) {
+      return res.status(404).json({ error: 'Factura no encontrada.' });
+    }
+
+    const sets = ['nit_cc = $1'];
+    const values = [nuevoNit];
+    let i = 2;
+    if (nuevoNombre !== undefined) {
+      sets.push(`nombre_razon_social = $${i}`);
+      values.push(nuevoNombre);
+      i++;
+    }
+    values.push(req.params.id, req.firmaId);
+    const actualizada = await pool.query(
+      `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i} AND contador_id = $${i + 1} RETURNING *`,
+      values
+    );
+    res.json(rowToInvoice(actualizada.rows[0]));
+  } catch (err) {
+    console.error('Error corrigiendo el NIT de la factura:', err);
+    res.status(500).json({ error: 'No se pudo corregir el NIT de la factura.' });
   }
 });
 
@@ -3306,13 +3383,13 @@ const CAMPOS_FACTURA_JSON = `{
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
   "nit_cc": "número de identificación (NIT o cédula) del proveedor/emisor, solo dígitos. Hay documentos reales que NO traen este número (ej. cuentas de cobro de una propiedad horizontal/conjunto residencial, donde en vez de un NIT aparece algo como 'Propiedad Horizontal' o el nombre del edificio) -- en esos casos deja este campo como cadena vacía. Nunca inventes un número ni tomes prestado uno de otra parte del documento (el consecutivo de la cuenta de cobro, la fecha, el NIT del adquiriente, etc.) -- si no hay un número de identificación real y propio del emisor, va vacío.",
   "dv": "dígito de verificación si aparece, si no aparece pon una cadena vacía",
-  "nombre_razon_social": "nombre o razón social del proveedor/emisor de la factura",
+  "nombre_razon_social": "nombre o razón social LEGAL del proveedor/emisor, asociado al NIT/cédula que anotaste en nit_cc -- no el nombre comercial, marca o logo del encabezado cuando sean distintos. Es un caso frecuente en cuentas de cobro e independientes: el logo/encabezado dice una marca o sigla (ej. 'IMB'), pero el bloque de datos del emisor (RUT, pie de página, firma) trae el nombre real de la persona o la razón social inscrita ante la DIAN (ej. 'Andrés Felipe Gómez') -- en ese caso usa SIEMPRE el nombre real asociado al NIT/cédula, nunca la marca o sigla del logo.",
   "letras_fe": "prefijo alfabético de la factura electrónica si existe (ej: FE, SETP), si no existe cadena vacía",
   "numeros_fe": "número o consecutivo de la factura electrónica, solo el número",
   "fecha_factura": "fecha de la factura en formato DD/MM/AAAA",
   "valor_sin_iva": "subtotal ANTES de IVA, en pesos colombianos ENTEROS (ver regla de formato abajo)",
   "valor_iva": "valor del IVA (impuesto), en pesos colombianos ENTEROS. Si la factura no discrimina IVA, usa 0",
-  "valor_con_iva": "valor TOTAL de la factura (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. Este debe ser el total final que paga el cliente",
+  "valor_con_iva": "valor TOTAL de la factura ANTES de descontar retenciones (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. OJO: algunas facturas y cuentas de cobro muestran como 'Total a pagar' o 'Neto a pagar' un valor que YA RESTÓ la Retención en la Fuente, ReteIVA o ReteICA -- en ese caso NO uses ese neto: usa el total antes de retenciones (subtotal + IVA) y anota cada retención descontada en su propio campo (rete_fuente, rete_iva, rete_ica).",
   "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
   "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
@@ -3321,6 +3398,7 @@ const CAMPOS_FACTURA_JSON = `{
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
   "autorretenedor": "true si el documento menciona explícitamente que el emisor es 'Autorretenedor' (de renta y/o de ICA) -- es muy común en facturas de servicios públicos (EPM y similares suelen imprimirlo en letra pequeña cerca del NIT del emisor, ej. 'Autorretenedor Renta -- Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO debe practicar retención en la fuente ni ReteICA sobre esta factura -- el proveedor ya se autorretiene y se la gira directamente a la DIAN/municipio.",
+  "solicita_articulo_383": "true SOLO si el documento (casi siempre una cuenta de cobro de una persona natural) dice explícitamente que la retención en la fuente se debe calcular con la tabla del artículo 383 del Estatuto Tributario, o certifica que el emisor NO contrató o vinculó dos o más trabajadores para su actividad (rentas de trabajo). false en cualquier otro caso, incluido cuando no estés seguro.",
   "saldo_vencido_detectado": "true SOLO si el documento muestra explícitamente un 'saldo vencido', 'deuda anterior', 'saldo anterior pendiente' o similar (frecuente en facturas de servicios públicos que arrastran periodos sin pagar) -- es decir, el 'total a pagar' del documento incluye algo más que el consumo/servicio de ESTE periodo. false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si ese saldo anterior ya fue pagado antes de registrar el gasto.",
   "anticipo_detectado": "true SOLO si el documento menciona explícitamente un anticipo o avance ya entregado/descontado (ej. 'anticipo del 50% ya cancelado', 'menos avance recibido'). false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si el total de la factura ya descuenta ese anticipo.",
   "valor_abonado_detectado": "SOLO si el documento indica un valor EXACTO ya abonado/anticipado/pagado sobre el total (ej. 'de los cuales se han abonado $20.000.000', 'anticipo recibido: $5.000.000'), ese valor en pesos ENTEROS. Si el documento menciona un anticipo pero SIN dar el valor exacto, o no menciona ningún abono, usa 0 -- no calcules ni asumas un porcentaje.",
@@ -3366,7 +3444,7 @@ ${REGLAS_FORMATO_VALORES}`;
 // una factura vieja se ve mal leída, se sepa exactamente qué modelo y
 // qué versión del prompt la generó -- barato de dejar registrado ahora,
 // imposible de reconstruir después con precisión.
-const INVOICE_PROMPT_VERSION = 'v1';
+const INVOICE_PROMPT_VERSION = 'v3';
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -3442,6 +3520,49 @@ const CAMPOS_CON_CONFIANZA = [
 // de tumbar toda la extracción. Un campo ausente en el resultado final
 // significa "sin dato de confianza" (la futura pantalla de revisión no
 // debería resaltarlo ni como confiable ni como dudoso).
+// Siglas/abreviaturas de tipo de sociedad (y similares) que SIEMPRE se
+// dejan en mayúsculas al normalizar mayúsculas/minúsculas -- convertir
+// "S.A.S" a "S.a.s" quedaría peor que dejarlo todo en mayúsculas. Se
+// compara sin los puntos (una palabra como "S.A.S." o "SAS" cae en la
+// misma entrada de este set).
+const SIGLAS_SOCIEDAD = new Set([
+  'SAS', 'SA', 'LTDA', 'EU', 'SCA', 'SC', 'SENC', 'ESAL', 'CIA', 'NIT', 'ESP', 'IPS', 'IE',
+]);
+
+// Normaliza mayúsculas/minúsculas de un texto leído por la IA (nombre
+// del proveedor, concepto) -- varios documentos reales vienen TODO EN
+// MAYÚSCULAS (factura de imprenta antigua) y otros todo en minúsculas
+// (una cuenta de cobro escrita a mano/digitada en un Word sin revisar),
+// así que dos facturas del mismo tipo de proveedor terminaban viéndose
+// completamente distintas en Enlaza sin que el contador hubiera hecho
+// nada distinto al escanearlas.
+//
+// A propósito NO toca un texto que YA tiene may/min mezcladas -- eso
+// normalmente significa que el documento (o una corrección manual
+// previa) ya viene bien escrito ("Andrés Felipe Gómez"), y no hay
+// forma de "arreglar" eso sin arriesgarse a dañarlo (ej. apellidos con
+// mayúscula interna, siglas dentro del nombre). Solo interviene en el
+// caso claro: TODO mayúsculas o TODO minúsculas.
+function normalizarMayusculasTexto(texto) {
+  if (typeof texto !== 'string' || texto.trim() === '') return texto;
+  const tieneMinuscula = /[a-zñáéíóúü]/.test(texto);
+  const tieneMayuscula = /[A-ZÑÁÉÍÓÚÜ]/.test(texto);
+  if (tieneMinuscula && tieneMayuscula) return texto; // ya viene mezclado -- no se toca
+  if (!tieneMinuscula && !tieneMayuscula) return texto; // no tiene letras (solo números/símbolos)
+
+  return texto.split(' ').map((palabra) => {
+    if (palabra === '') return palabra;
+    const sinPuntos = palabra.replace(/\./g, '').toUpperCase();
+    if (SIGLAS_SOCIEDAD.has(sinPuntos)) return palabra.toUpperCase();
+    // Palabras muy cortas unidas por guion/apóstrofe (ej. "Mc'Donald",
+    // "Pérez-Gómez") -- Capitaliza cada tramo por separado.
+    return palabra.split('-').map((tramo) => {
+      if (tramo === '') return tramo;
+      return tramo.charAt(0).toUpperCase() + tramo.slice(1).toLowerCase();
+    }).join('-');
+  }).join(' ');
+}
+
 function sanitizarConfianzaCampos(crudo) {
   const limpio = {};
   if (!crudo || typeof crudo !== 'object' || Array.isArray(crudo)) return limpio;
@@ -3468,7 +3589,51 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     }
   }
 
+  // Ver normalizarMayusculasTexto() arriba -- solo nombre_razon_social y
+  // concepto (los dos campos de texto libre que más se ven en pantalla),
+  // nunca nit_cc ni ningún valor numérico.
+  parsed.nombre_razon_social = normalizarMayusculasTexto(parsed.nombre_razon_social);
+  parsed.concepto = normalizarMayusculasTexto(parsed.concepto);
+
   parsed.confianza_campos = sanitizarConfianzaCampos(parsed.confianza_campos);
+
+  // ---------- Red de seguridad sobre lo que leyó la IA ----------
+  // (ajustes pedidos en la revisión contable de oct. 2026)
+
+  // NIT: solo dígitos. Si la IA puso un nombre en el campo NIT (ej. el
+  // NIT del comprador quedó como "bosques de la macarena"), se deja
+  // vacío y se baja su confianza, para que el contador lo complete.
+  for (const campoNit of ['nit_cc', 'adquiriente_nit']) {
+    const original = parsed[campoNit];
+    const limpio = limpiarNitLeido(original);
+    if (String(original || '').trim() && !limpio && campoNit === 'nit_cc') {
+      parsed.confianza_campos.nit_cc = 0;
+    }
+    parsed[campoNit] = limpio;
+  }
+
+  // Nombres siempre en MAYÚSCULAS -- la IA los copia como vengan en el
+  // documento, y quedaban unos en minúsculas y otros en mayúsculas.
+  for (const campoNombre of ['nombre_razon_social', 'adquiriente_nombre']) {
+    if (typeof parsed[campoNombre] === 'string') {
+      parsed[campoNombre] = parsed[campoNombre].replace(/\s+/g, ' ').trim().toLocaleUpperCase('es-CO');
+    }
+  }
+
+  // Total con IVA: algunas facturas muestran como total el neto que YA
+  // restó las retenciones. Si el total leído es exactamente subtotal +
+  // IVA - retenciones, se corrige al total ANTES de retenciones (que es
+  // lo que espera el resto del sistema: asiento, cartera, retenciones).
+  const sinIvaLeido = Number(parsed.valor_sin_iva) || 0;
+  const ivaLeido = Number(parsed.valor_iva) || 0;
+  const conIvaLeido = Number(parsed.valor_con_iva) || 0;
+  const retencionesLeidas = (Number(parsed.rete_fuente) || 0) + (Number(parsed.rete_iva) || 0) + (Number(parsed.rete_ica) || 0);
+  if (sinIvaLeido > 0 && retencionesLeidas > 0 &&
+      Math.abs(sinIvaLeido + ivaLeido - conIvaLeido) > 1 &&
+      Math.abs(sinIvaLeido + ivaLeido - retencionesLeidas - conIvaLeido) <= 1) {
+    parsed.valor_con_iva = sinIvaLeido + ivaLeido;
+    parsed.total_neto_corregido = true;
+  }
 
   // Se marcan aquí (no en llamarGeminiJSON) para que apliquen por igual
   // a un documento suelto y a cada documento de un paquete -- los dos
@@ -3602,18 +3767,17 @@ async function procesarPaqueteDocumento(userId, base64, effectiveMediaType, forz
   return { documentos };
 }
 
-// Versión de servidor de la misma detección que ya hacía el navegador
-// en Escanear/Carga masiva -- comparar el NIT de la factura contra los
-// clientes del contador para decidir solo si es ingreso o egreso. Vive
-// aquí también porque el procesamiento en segundo plano no tiene un
-// navegador que lo haga por él.
-async function detectarClienteYMovimientoServidor(contadorId, data) {
-  const { rows: clientes } = await pool.query('SELECT id, nit, nombre FROM clients WHERE contador_id = $1', [contadorId]);
-  const asComprador = clientes.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
-  const asVendedor = clientes.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
-  if (asComprador) return { clienteId: asComprador.id, tipoMovimiento: 'egreso', confiado: true };
-  if (asVendedor) return { clienteId: asVendedor.id, tipoMovimiento: 'ingreso', confiado: true };
-  return { clienteId: '', tipoMovimiento: 'egreso', confiado: false };
+// Decide cliente e ingreso/egreso de una factura leída en segundo plano
+// (Carga masiva), con la MISMA regla que usan Escanear y Carga masiva en
+// el navegador -- ver public/movimiento.js. Si el lote se subió desde la
+// ficha de un cliente (`clienteFijoId`), solo se decide para ese cliente;
+// antes ese dato se guardaba en el lote pero no se usaba, y una factura
+// podía quedar asignada a otro cliente de la firma.
+async function detectarClienteYMovimientoServidor(contadorId, data, clienteFijoId) {
+  const { rows: clientes } = await pool.query('SELECT id, nit, dv, nombre FROM clients WHERE contador_id = $1', [contadorId]);
+  const clienteFijo = clienteFijoId ? clientes.find((c) => c.id === clienteFijoId) || null : null;
+  const r = clasificarMovimiento(data, clientes, { clienteFijo });
+  return { clienteId: r.clienteId, tipoMovimiento: r.tipoMovimiento, confiado: r.confiado, motivo: r.motivo, otroClienteId: r.otroClienteId };
 }
 
 app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {
@@ -4171,7 +4335,7 @@ function normalizarNit(nit) {
 app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.firmaId]
     );
@@ -4193,25 +4357,27 @@ app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'co
     const regimenSimple = !!req.body.regimen_simple;
     const agenteRetencionIva = !!req.body.agente_retencion_iva;
     const declaranteRenta = !!req.body.declarante_renta;
+    const aplicaArticulo383 = !!req.body.aplica_articulo_383;
 
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
-    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !nombre && !notas) {
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !nombre && !notas) {
       await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
-      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, notas: '', borrado: true });
+      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, aplica_articulo_383: false, notas: '', borrado: true });
     }
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (contador_id, nit) DO UPDATE SET
          nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
          autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
          agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
+         aplica_articulo_383 = EXCLUDED.aplica_articulo_383,
          notas = EXCLUDED.notas, updated_at = now()
-       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at`,
-      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, notas]
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
+      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas]
     );
     res.json(rows[0]);
   } catch (err) {

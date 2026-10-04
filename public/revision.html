@@ -6,7 +6,8 @@
 <title>Enlaza — Revisión</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <style>
   .wrap{ max-width:1240px; }
@@ -17,66 +18,72 @@
 
   .cola{
     flex:0 0 340px; width:340px;
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
     box-shadow:var(--shadow-sm); overflow:hidden;
   }
   @media (max-width:880px){ .cola{ width:100%; flex:1 1 auto; } }
   .cola-head{ padding:14px 16px 10px; border-bottom:1px solid var(--line); }
-  .cola-head .cola-titulo{ font-family:'Archivo',sans-serif; font-weight:800; font-size:14px; color:var(--ink); display:flex; align-items:center; justify-content:space-between; }
+  .cola-head .cola-titulo{ font-family:var(--font-display); font-weight:800; font-size:var(--t-14); color:var(--ink); display:flex; align-items:center; justify-content:space-between; }
   .cola-count{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:600;
-    background:var(--coral-tint); color:var(--coral-deep); border-radius:100px; padding:2px 9px;
+    font-family:var(--font-num); font-size:var(--t-12); font-weight:600;
+    background:var(--pet-100); color:var(--pet-600); border-radius:var(--r-pill); padding:2px 9px;
   }
   .cola-buscar{ margin-top:10px; }
   .cola-buscar input{
-    width:100%; font-family:'Inter',sans-serif; font-size:12.5px;
-    padding:8px 11px; border:1px solid var(--line); border-radius:7px; background:var(--paper-sunken); color:var(--ink);
+    width:100%; min-height:40px; font-family:var(--font-ui); font-size:var(--t-14);
+    padding:var(--s-2) var(--s-3); border:1px solid var(--border-strong); border-radius:var(--r-sm); background:var(--surface); color:var(--text);
+    transition:border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
   }
-  .cola-buscar input:focus{ outline:none; border-color:var(--petroleo); background:#fff; }
+  .cola-buscar input:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
   /* Filtro rápido de triage -- ver Tarea 8 "excepciones unificadas": deja
      ver de una sola vez qué facturas pendientes tienen algo para
      revisar aparte de la aprobación normal (sin NIT, letras vs. números,
      saldo vencido, anticipo, valores descuadrados). */
   .cola-filtro-exc{
     display:flex; align-items:center; gap:6px; margin-top:9px;
-    font-family:'Inter',sans-serif; font-size:12px; color:var(--ink-soft); cursor:pointer;
+    font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-soft); cursor:pointer;
   }
-  .cola-filtro-exc input{ accent-color:var(--coral); cursor:pointer; }
+  .cola-filtro-exc input{ accent-color:var(--pet-600); cursor:pointer; width:16px; height:16px; }
   .cola-lista{ max-height:640px; overflow-y:auto; }
   .cola-item{
     display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
     padding:12px 16px; border-bottom:1px solid var(--line);
-    font-family:'Inter',sans-serif; transition:background .12s ease;
+    font-family:var(--font-ui); transition:background .12s ease;
   }
   .cola-item:hover{ background:var(--paper-sunken); }
-  .cola-item.activo{ background:var(--petroleo-soft); box-shadow:inset 3px 0 0 var(--petroleo); }
+  .cola-item.activo{ background:var(--pet-100); box-shadow:inset 3px 0 0 var(--pet-600); }
   .cola-item .ci-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .cola-item .ci-nombre{ font-weight:700; font-size:13px; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .cola-item .ci-monto{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; color:var(--ink-soft); white-space:nowrap; }
-  .cola-item .ci-meta{ display:flex; align-items:center; gap:8px; margin-top:4px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); }
+  .cola-item .ci-nombre{ font-weight:700; font-size:var(--t-13); color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cola-item .ci-monto{ font-family:var(--font-num); font-size:var(--t-13); font-weight:600; color:var(--text); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .cola-item .ci-meta{ display:flex; align-items:center; gap:8px; margin-top:4px; font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); }
   .ci-badge{
-    display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600;
-    padding:1px 7px; border-radius:100px; text-transform:uppercase; letter-spacing:.03em;
+    display:inline-flex; align-items:center; gap:4px; font-size:var(--t-12); font-weight:600;
+    padding:1px 7px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:.03em;
   }
-  .ci-badge.dudoso{ background:#FBF3D9; color:#7A5C0A; }
+  .ci-badge.dudoso{ background:var(--warn-bg); color:var(--warn); }
   .ci-badge.sin-asiento{ background:var(--paper-sunken); color:var(--ink-faint); }
-  .cola-vacia{ padding:34px 20px; text-align:center; font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-faint); }
+  .cola-vacia{ padding:34px 20px; text-align:center; font-family:var(--font-num); font-size:var(--t-13); color:var(--ink-faint); }
 
   .detalle-panel{
     flex:1 1 auto; min-width:0;
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    box-shadow:var(--shadow-sm); padding:24px 26px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
+    box-shadow:var(--shadow-sm); padding:var(--s-6);
   }
-  .detalle-vacio{ padding:60px 20px; text-align:center; color:var(--ink-faint); font-family:'JetBrains Mono',monospace; font-size:13px; }
+  @media (max-width:600px){
+    .detalle-panel{ padding:var(--s-4); }
+    /* Rejillas de edición escritas en línea por el JS: en celular pasan a 2 columnas */
+    .detalle-panel [style*="grid-template-columns"]{ grid-template-columns:repeat(2, minmax(0,1fr)) !important; }
+  }
+  .detalle-vacio{ padding:60px 20px; text-align:center; color:var(--ink-faint); font-family:var(--font-num); font-size:var(--t-13); }
 
   .det-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
-  .det-titulo{ font-family:'Archivo',sans-serif; font-weight:800; font-size:19px; color:var(--ink); }
-  .det-sub{ font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft); margin-top:3px; }
+  .det-titulo{ font-family:var(--font-display); font-weight:800; font-size:var(--t-20); color:var(--ink); }
+  .det-sub{ font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-soft); margin-top:3px; }
   .det-acciones{ display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; }
 
   .det-seccion{ margin-top:22px; }
   .det-seccion h3{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.06em;
     color:var(--ink-faint); margin:0 0 10px;
   }
 
@@ -85,68 +92,68 @@
   .det-con-original{ display:grid; grid-template-columns:minmax(220px,340px) 1fr; gap:18px; align-items:start; }
   @media (max-width:880px){ .det-con-original{ grid-template-columns:1fr; } }
   .det-doc-original h3{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.06em;
     color:var(--ink-faint); margin:0 0 10px;
   }
   .det-doc-original img, .det-doc-original embed{
-    width:100%; border-radius:8px; border:1px solid var(--line); display:block; background:#fff;
+    width:100%; border-radius:var(--r-sm); border:1px solid var(--line); display:block; background:#fff;
   }
   .det-doc-original .det-doc-link{
-    display:inline-block; margin-top:8px; font-size:12px; color:var(--petroleo); text-decoration:none;
+    display:inline-block; margin-top:8px; font-size:var(--t-12); color:var(--petroleo); text-decoration:none;
   }
 
-  .fd-row.baja-confianza .fd-value{ background:#FBF3D9; }
-  .fd-row.baja-confianza .fd-label{ background:#F6EAC8; color:#7A5C0A; }
+  .fd-row.baja-confianza .fd-value{ background:var(--warn-bg); }
+  .fd-row.baja-confianza .fd-label{ background:var(--warn-bg); color:var(--warn); }
   .confianza-pill{
-    font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600;
-    margin-left:8px; padding:1px 7px; border-radius:100px; white-space:nowrap;
+    font-family:var(--font-num); font-size:var(--t-12); font-weight:600;
+    margin-left:8px; padding:1px 7px; border-radius:var(--r-pill); white-space:nowrap;
   }
-  .confianza-pill.baja{ background:#E0AD4E; color:#3A2C05; }
+  .confianza-pill.baja{ background:var(--warn-line); color:var(--warn); }
 
-  .asiento-tabla{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  .asiento-tabla{ width:100%; border-collapse:collapse; font-size:var(--t-13); }
   .asiento-tabla th, .asiento-tabla td{ padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; }
   .asiento-tabla th{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.04em;
     color:var(--ink-faint); background:var(--paper-sunken);
   }
-  .asiento-tabla td.num{ font-family:'JetBrains Mono',monospace; text-align:right; }
+  .asiento-tabla td.num{ font-family:var(--font-num); text-align:right; }
   .asiento-tabla tfoot td{ font-weight:700; border-top:1.5px solid var(--line-strong); border-bottom:none; }
-  .asiento-tabla tfoot td.num{ font-family:'JetBrains Mono',monospace; }
+  .asiento-tabla tfoot td.num{ font-family:var(--font-num); }
 
   .estado-badge{
-    display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace;
-    font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.03em;
-    padding:3px 10px; border-radius:100px;
+    display:inline-flex; align-items:center; gap:5px; font-family:var(--font-num);
+    font-size:var(--t-12); font-weight:600; text-transform:uppercase; letter-spacing:.03em;
+    padding:3px 10px; border-radius:var(--r-pill);
   }
   .estado-badge::before{ content:''; width:6px; height:6px; border-radius:50%; background:currentColor; }
-  .estado-badge.propuesto{ background:#FBF3D9; color:#7A5C0A; }
-  .estado-badge.aprobado{ background:var(--moss-tint); color:var(--moss-deep); }
+  .estado-badge.propuesto{ background:var(--warn-bg); color:var(--warn); }
+  .estado-badge.aprobado{ background:var(--ok-bg); color:var(--ok); }
 
   .sin-asiento-nota, .tarifa-nota{
-    font-family:'Inter',sans-serif; font-size:13px; color:var(--ink-soft);
-    background:var(--paper-sunken); border-radius:8px; padding:12px 14px;
+    font-family:var(--font-ui); font-size:var(--t-13); color:var(--ink-soft);
+    background:var(--paper-sunken); border-radius:var(--r-sm); padding:12px 14px;
   }
   .tarifa-nota.encontrada{ background:var(--petroleo-soft); color:var(--petroleo-deep); }
-  .tarifa-nota b{ font-family:'JetBrains Mono',monospace; }
+  .tarifa-nota b{ font-family:var(--font-num); }
 
   /* Trazabilidad de la extracción -- qué modelo/versión del prompt de
      Gemini generó esta factura (ver tarea "versión del prompt" de la
      hoja de ruta). Discreto a propósito: es un dato para depurar, no
      algo que el contador necesite ver a diario. */
   .ef-label{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase;
     letter-spacing:.04em; color:var(--ink-faint); display:block; margin-bottom:4px;
   }
   .fd-trazabilidad{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint);
+    font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint);
     margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
   }
 
   #cargando{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+    font-family:var(--font-num); font-size:var(--t-13); color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:30px 0;
   }
-  .dot{width:7px;height:7px;background:var(--moss);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--pet-200);border-top-color:var(--pet-600);animation:spin .7s linear infinite;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 </style>
 </head>
@@ -491,41 +498,46 @@ function renderFormularioEdicionFactura(inv){
   const campoTexto = (id, label, valor) => `
     <div class="field">
       <label class="ef-label">${label}</label>
-      <input type="text" id="${id}" value="${escapeHtml(valor ?? '')}"
-        style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'Inter',sans-serif; font-size:12.5px; background:#fff; color:var(--ink);">
+      <input class="input" type="text" id="${id}" value="${escapeHtml(valor ?? '')}"
+        >
     </div>`;
   const campoNumero = (id, label, valor) => `
     <div class="field">
       <label class="ef-label">${label}</label>
-      <input type="number" id="${id}" value="${Number(valor) || 0}" min="0" step="1"
-        style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'JetBrains Mono',monospace; font-size:12.5px; background:#fff; color:var(--ink);">
+      <input class="input input--num-font" type="number" id="${id}" value="${Number(valor) || 0}" min="0" step="1"
+        >
     </div>`;
 
   const filasItems = itemsFuente.map((it, idx) => `
     <div class="ef-item-row" data-idx="${idx}" style="display:grid; grid-template-columns:2fr 1fr 1.3fr 1.3fr auto; gap:8px; align-items:end; margin-bottom:8px;">
-      <div class="field"><label class="ef-label">Descripción</label><input type="text" class="ef-item-desc" value="${escapeHtml(it.descripcion)}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"></div>
-      <div class="field"><label class="ef-label">Subtotal</label><input type="number" class="ef-item-subtotal" value="${Number(it.subtotal) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
-      <div class="field"><label class="ef-label">Categoría</label><select class="ef-item-categoria" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;">${opcionesCategoria(it.categoria_concepto)}</select></div>
-      <div class="field"><label class="ef-label">Subcuenta</label>${campoSubcuentaHtml(it.categoria_concepto, it.subcuenta_gasto, 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"')}</div>
-      <button type="button" class="btn ghost ef-item-quitar" title="Quitar ítem" style="padding:7px 10px; font-size:12px;">✕</button>
+      <div class="field"><label class="ef-label">Descripción</label><input type="text" class="ef-item-desc input" value="${escapeHtml(it.descripcion)}" ></div>
+      <div class="field"><label class="ef-label">Subtotal</label><input type="number" class="ef-item-subtotal input input--num-font" value="${Number(it.subtotal) || 0}" min="0" step="1" ></div>
+      <div class="field"><label class="ef-label">Categoría</label><select class="ef-item-categoria select" >${opcionesCategoria(it.categoria_concepto)}</select></div>
+      <div class="field"><label class="ef-label">Subcuenta</label>${campoSubcuentaHtml(it.categoria_concepto, it.subcuenta_gasto, 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-12);"')}</div>
+      <button type="button" class="btn ghost ef-item-quitar btn--sm" title="Quitar ítem" >✕</button>
     </div>`).join('');
 
   const campoSoloLectura = (label, valor) => `
     <div class="field">
       <label class="ef-label">${label}</label>
-      <div style="padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'Inter',sans-serif; font-size:12.5px; background:var(--paper-sunken); color:var(--ink-soft);">${escapeHtml(valor) || '—'}</div>
+      <div style="padding:8px 10px; border:1px solid var(--line); border-radius:var(--r-sm); font-family:var(--font-ui); font-size:var(--t-13); background:var(--paper-sunken); color:var(--ink-soft);">${escapeHtml(valor) || '—'}</div>
     </div>`;
 
   return `<div class="edicion-factura" style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">
-    <div style="font-family:'Inter',sans-serif; font-size:11.5px; color:var(--ink-faint); margin-bottom:10px;">El proveedor y el NIT identifican quién emitió el documento -- no se editan acá. Si están mal leídos, borra la factura y vuélvela a escanear/digitar.</div>
+    <div style="font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-faint); margin-bottom:10px;">El proveedor y el NIT identifican quién emitió el documento -- no se editan acá. Si quedaron mal leídos o mal digitados, corrígelos en Facturas con el botón "Corregir NIT" (en el detalle de la factura).</div>
     <div style="display:grid; grid-template-columns:repeat(2, minmax(140px,1fr)); gap:10px;">
       ${campoSoloLectura('Proveedor', inv.nombre_razon_social)}
       ${campoSoloLectura('NIT / Cédula', inv.nit_cc)}
       ${campoTexto('editFecha', 'Fecha (AAAA-MM-DD)', inv.fecha_factura)}
-      ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : ''}
+      ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : `
+        <div class="field">
+          <label class="ef-label">Subtotal (suma de los ítems)</label>
+          <div id="efSubtotalCalculado" class="input input--num-font" style="background:var(--surface-sunken); color:var(--text-2); display:flex; align-items:center;">$${itemsFuente.reduce((suma, it) => suma + (Number(it.subtotal) || 0), 0).toLocaleString('es-CO')}</div>
+          <span style="font-size:var(--t-12); color:var(--text-3);">Para cambiar el valor base, edita el subtotal de cada ítem abajo.</span>
+        </div>`}
       ${campoNumero('editIva', 'IVA', inv.valor_iva)}
-      ${!tieneItems ? `<div class="field"><label class="ef-label">Categoría</label><select id="editCategoria" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;">${opcionesCategoria(inv.categoria_concepto)}</select></div>` : ''}
-      ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label>${campoSubcuentaHtml(inv.categoria_concepto, inv.subcuenta_gasto, 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"')}</div>` : ''}
+      ${!tieneItems ? `<div class="field"><label class="ef-label">Categoría</label><select class="select" id="editCategoria" >${opcionesCategoria(inv.categoria_concepto)}</select></div>` : ''}
+      ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label>${campoSubcuentaHtml(inv.categoria_concepto, inv.subcuenta_gasto, 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-13);"')}</div>` : ''}
     </div>
     <div style="display:grid; grid-template-columns:repeat(3, minmax(110px,1fr)); gap:10px; margin-top:10px;">
       ${campoNumero('editReteFuente', 'Rete Fuente', inv.rete_fuente)}
@@ -534,16 +546,16 @@ function renderFormularioEdicionFactura(inv){
     </div>
     ${tieneItems ? `
       <div style="margin-top:16px;">
-        <div class="ef-label" style="margin-bottom:8px;">Ítems de la factura (el subtotal de arriba se recalcula solo a partir de estos)</div>
+        <div class="ef-label" style="margin-bottom:8px;">Ítems de la factura -- el valor base (subtotal) de la factura es la suma de estos</div>
         <div id="efItemsLista">${filasItems}</div>
-        <button type="button" class="btn ghost" id="btnAgregarItem" style="padding:7px 14px; font-size:12px; margin-top:4px;">+ Agregar ítem</button>
+        <button type="button" class="btn ghost btn--sm" id="btnAgregarItem" style="margin-top:4px;">+ Agregar ítem</button>
       </div>
     ` : ''}
     <div style="display:flex; gap:8px; margin-top:16px;">
-      <button type="button" class="btn secondary" id="btnGuardarFactura" style="padding:8px 15px; font-size:12px;">Guardar cambios</button>
-      <button type="button" class="btn ghost" id="btnCancelarEdicionFactura" style="padding:8px 15px; font-size:12px;">Cancelar</button>
+      <button type="button" class="btn secondary btn--sm" id="btnGuardarFactura" >Guardar cambios</button>
+      <button type="button" class="btn ghost btn--sm" id="btnCancelarEdicionFactura" >Cancelar</button>
     </div>
-    <div style="font-family:'Inter',sans-serif; font-size:11.5px; color:var(--ink-faint); margin-top:7px;">Al guardar, el asiento contable de abajo se recalcula solo con los nuevos valores.</div>
+    <div style="font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-faint); margin-top:7px;">Al guardar, el asiento contable de abajo se recalcula solo con los nuevos valores.</div>
   </div>`;
 }
 
@@ -553,11 +565,11 @@ function renderFormularioEdicionFactura(inv){
 // líneas desde la interfaz).
 function filaLineaAsientoHtml(l, idx, esLaUnica){
   return `<div class="asi-linea-row" data-idx="${idx}" style="display:grid; grid-template-columns:100px 1.6fr 110px 110px auto; gap:8px; align-items:end; margin-bottom:8px;">
-    <div class="field"><label class="ef-label">Código</label><input type="text" class="asi-cuenta-codigo" value="${escapeHtml(l.cuenta_codigo || '')}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
-    <div class="field"><label class="ef-label">Nombre cuenta</label><input type="text" class="asi-cuenta-nombre" value="${escapeHtml(l.cuenta_nombre || '')}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"></div>
-    <div class="field"><label class="ef-label">Débito</label><input type="number" class="asi-debito" value="${Number(l.debito) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
-    <div class="field"><label class="ef-label">Crédito</label><input type="number" class="asi-credito" value="${Number(l.credito) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
-    <button type="button" class="btn ghost asi-linea-quitar" title="Quitar línea" style="padding:7px 10px; font-size:12px;" ${esLaUnica ? 'disabled' : ''}>✕</button>
+    <div class="field"><label class="ef-label">Código</label><input type="text" class="asi-cuenta-codigo input input--num-font" value="${escapeHtml(l.cuenta_codigo || '')}" ></div>
+    <div class="field"><label class="ef-label">Nombre cuenta</label><input type="text" class="asi-cuenta-nombre input" value="${escapeHtml(l.cuenta_nombre || '')}" ></div>
+    <div class="field"><label class="ef-label">Débito</label><input type="number" class="asi-debito input input--num-font" value="${Number(l.debito) || 0}" min="0" step="1" ></div>
+    <div class="field"><label class="ef-label">Crédito</label><input type="number" class="asi-credito input input--num-font" value="${Number(l.credito) || 0}" min="0" step="1" ></div>
+    <button type="button" class="btn ghost asi-linea-quitar btn--sm" title="Quitar línea"  ${esLaUnica ? 'disabled' : ''}>✕</button>
   </div>`;
 }
 
@@ -591,10 +603,10 @@ function renderAsientoSeccion(inv){
     return `<div class="det-seccion">
       <h3>Asiento contable</h3>
       <div id="asientoLineasEdicion">${filasEdit}</div>
-      <button type="button" class="btn ghost" id="btnAgregarLineaAsiento" style="padding:7px 14px; font-size:12px; margin-top:4px;">+ Agregar línea</button>
+      <button type="button" class="btn ghost btn--sm" id="btnAgregarLineaAsiento" style="margin-top:4px;">+ Agregar línea</button>
       <div style="display:flex; gap:8px; margin-top:14px;">
-        <button type="button" class="btn secondary" id="btnGuardarAsiento" style="padding:8px 15px; font-size:12px;">Guardar cambios</button>
-        <button type="button" class="btn ghost" id="btnCancelarEdicionAsiento" style="padding:8px 15px; font-size:12px;">Cancelar</button>
+        <button type="button" class="btn secondary btn--sm" id="btnGuardarAsiento" >Guardar cambios</button>
+        <button type="button" class="btn ghost btn--sm" id="btnCancelarEdicionAsiento" >Cancelar</button>
       </div>
     </div>`;
   }
@@ -614,7 +626,7 @@ function renderAsientoSeccion(inv){
       <span class="estado-badge ${escapeHtml(asientoActual.estado)}">${aprobado ? 'Aprobado' : 'Propuesto'}</span>
       <div style="display:flex; gap:8px;">
         ${(!aprobado && puedeAdministrar(miRol))
-          ? '<button type="button" class="btn ghost" id="btnEditarAsiento" style="padding:8px 16px; font-size:12.5px;">✎ Editar asiento</button>'
+          ? '<button type="button" class="btn ghost btn--sm" id="btnEditarAsiento" >✎ Editar asiento</button>'
           : ''}
       </div>
     </div>
@@ -667,7 +679,7 @@ function renderDetalle(){
         <div class="det-sub">NIT ${escapeHtml(inv.nit_cc) || '—'} · ${escapeHtml(inv.fecha_factura) || '—'} · ${inv.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso'}</div>
       </div>
       <div class="det-acciones">
-        ${(puedeAdministrar(miRol) && !editandoFactura) ? '<button type="button" class="btn ghost" id="btnEditarFactura" style="padding:10px 16px; font-size:12.5px;">✎ Editar factura</button>' : ''}
+        ${(puedeAdministrar(miRol) && !editandoFactura) ? '<button type="button" class="btn ghost btn--sm" id="btnEditarFactura" >✎ Editar factura</button>' : ''}
         ${puedeAdministrar(miRol) ? '<button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>' : ''}
       </div>
     </div>
@@ -734,7 +746,7 @@ function renderDetalle(){
   if (editCategoriaEl) editCategoriaEl.addEventListener('change', (e) => {
     const subcuentaActual = document.getElementById('editSubcuenta');
     const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-    subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"');
+    subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-13);"');
   });
   // Elegir "Escribir código a mano" en el selector de subcuenta (en
   // cualquier categoría, no solo "otro") lo cambia por un campo de
@@ -744,24 +756,34 @@ function renderDetalle(){
   if (editSubcuentaEl) editSubcuentaEl.addEventListener('change', (e) => {
     if (e.target.tagName !== 'SELECT' || e.target.value !== '__manual__') return;
     const categoriaActual = editCategoriaEl ? editCategoriaEl.value : (document.getElementById('editCategoria') ? document.getElementById('editCategoria').value : '');
-    e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"', true);
+    e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-13);"', true);
     const nuevo = document.getElementById('editSubcuenta');
     if (nuevo) nuevo.focus();
   });
   const efItemsLista = document.getElementById('efItemsLista');
   if (efItemsLista) {
+    // El subtotal de la factura se ve actualizarse mientras se editan
+    // los ítems (reporte de la revisora: "no me dejó cambiar el valor
+    // base" -- se cambia desde aquí, y ahora se ve el resultado).
+    efItemsLista.addEventListener('input', (e) => {
+      if (!e.target.classList.contains('ef-item-subtotal')) return;
+      const totalEl = document.getElementById('efSubtotalCalculado');
+      if (!totalEl) return;
+      const suma = [...efItemsLista.querySelectorAll('.ef-item-subtotal')].reduce((t, el) => t + (Number(el.value) || 0), 0);
+      totalEl.textContent = '$' + suma.toLocaleString('es-CO');
+    });
     efItemsLista.addEventListener('change', (e) => {
       if (e.target.classList.contains('ef-item-categoria')) {
         const row = e.target.closest('.ef-item-row');
         const subcuentaActual = row.querySelector('.ef-item-subcuenta');
         const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-        subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"');
+        subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-12);"');
       } else if (e.target.classList.contains('ef-item-subcuenta') && e.target.tagName === 'SELECT' && e.target.value === '__manual__') {
         // Mismo caso que arriba, línea por línea: "Escribir código a
         // mano" en cualquier categoría cambia esa celda a texto libre.
         const row = e.target.closest('.ef-item-row');
         const categoriaActual = row.querySelector('.ef-item-categoria').value;
-        e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"', true);
+        e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-12);"', true);
         const nuevo = row.querySelector('.ef-item-subcuenta');
         if (nuevo) nuevo.focus();
       }

@@ -6,7 +6,8 @@
 <title>Enlaza — Configuración</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
 <script src="/retenciones.js"></script>
 <style>
@@ -14,10 +15,10 @@
 
   .config-section{
     --paper-raised:#FFFFFF;
-    --ink:#1D2A32;
-    --ink-soft:#4A5E68;
-    --ink-faint:#8AA0AC;
-    --line:#DCE7EC;
+    --ink:var(--n-900);
+    --ink-soft:var(--n-700);
+    --ink-faint:var(--n-500);
+    --line:var(--n-200);
     color:var(--ink);
     margin-bottom:36px;
   }
@@ -25,61 +26,64 @@
     display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
     margin-bottom:14px; flex-wrap:wrap;
   }
-  .config-section-head h2{ font-size:19px; font-weight:800; margin:0; font-family:'Archivo',sans-serif; }
-  .config-section-head p{ font-size:13px; color:var(--ink-soft); margin:4px 0 0; max-width:62ch; }
+  .config-section-head h2{ font-size:var(--t-20); font-weight:800; margin:0; font-family:var(--font-display); }
+  .config-section-head p{ font-size:var(--t-13); color:var(--ink-soft); margin:4px 0 0; max-width:62ch; }
 
   #formTerceros, #formIca, #formAprendida, #listaTerceros, #listaIca, #listaAprendidas, #emptyTerceros, #emptyIca, #emptyAprendidas{
-    --paper-raised:#FFFFFF; --ink:#1D2A32; --ink-soft:#4A5E68; --ink-faint:#8AA0AC; --line:#DCE7EC;
+    --paper-raised:#FFFFFF; --ink:var(--n-900); --ink-soft:var(--n-700); --ink-faint:var(--n-500); --line:var(--n-200);
     color:var(--ink);
   }
   .config-form{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
     padding:22px 24px; margin-bottom:18px;
-    box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    box-shadow:var(--sh-2);
   }
   .config-form-top{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; }
-  .config-form-top h3{ font-size:14.5px; font-weight:700; margin:0; font-family:'Archivo',sans-serif; }
+  .config-form-top h3{ font-size:var(--t-14); font-weight:700; margin:0; font-family:var(--font-display); }
 
   .form-row{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .form-row.cols-3{ grid-template-columns:1fr 1fr 1fr; }
   .form-row.cols-4{ grid-template-columns:1.4fr 1.4fr 1fr 1fr; }
   @media (max-width:760px){ .form-row, .form-row.cols-3, .form-row.cols-4{ grid-template-columns:1fr 1fr; } }
+  @media (max-width:480px){ .form-row, .form-row.cols-3, .form-row.cols-4{ grid-template-columns:1fr; } }
+  .form-row > *{ min-width:0; }
 
   .field{ display:flex; flex-direction:column; gap:7px; }
   .field label{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
-    letter-spacing:.05em; color:var(--ink-faint);
+    font-family:var(--font-ui); font-size:var(--t-13); font-weight:600; color:var(--text-2);
   }
   .field input, .field select{
-    border:1px solid var(--line); border-radius:7px; padding:10px 12px;
-    font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink);
+    min-height:40px; border:1px solid var(--border-strong); border-radius:var(--r-sm); padding:var(--s-2) var(--s-3);
+    font-family:inherit; font-size:var(--t-14); background:var(--surface); color:var(--text); width:100%;
+    transition:border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
   }
-  .field input:focus, .field select:focus{ outline:none; border-color:var(--petroleo); }
+  .field input:hover, .field select:hover{ border-color:var(--n-400); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
 
   .resp-grid{ display:grid; grid-template-columns:1fr 1fr; gap:9px 20px; margin-top:14px; }
   @media (max-width:600px){ .resp-grid{ grid-template-columns:1fr; } }
-  .resp-check{ display:flex; align-items:flex-start; gap:8px; font-size:12.5px; color:var(--ink); cursor:pointer; }
+  .resp-check{ display:flex; align-items:flex-start; gap:8px; font-size:var(--t-13); color:var(--ink); cursor:pointer; }
   .resp-check input{ width:15px; height:15px; accent-color:var(--petroleo); cursor:pointer; margin-top:1px; flex-shrink:0; }
-  .resp-check .resp-desc{ font-size:11px; color:var(--ink-faint); display:block; }
+  .resp-check .resp-desc{ font-size:var(--t-12); color:var(--ink-faint); display:block; }
 
   .config-form .btn{ height:42px; margin-top:16px; padding:0 18px; }
   .config-form .btn.secondary-inline{ margin-left:10px; }
-  .form-error{ margin-top:12px; font-size:12.5px; color:#B0402D; display:none; }
+  .form-error{ margin-top:12px; font-size:var(--t-13); color:var(--err); display:none; }
   .form-error.show{ display:block; }
 
   .buscador{
     display:flex; align-items:center; gap:8px; margin-bottom:12px;
   }
   .buscador input{
-    flex:1; border:1px solid var(--line); border-radius:8px; padding:10px 13px;
-    font-family:inherit; font-size:13px; background:#fff; color:var(--ink);
+    flex:1; border:1px solid var(--line); border-radius:var(--r-sm); padding:10px 13px;
+    font-family:inherit; font-size:var(--t-13); background:#fff; color:var(--ink);
   }
   .buscador input:focus{ outline:none; border-color:var(--petroleo); }
-  .buscador-count{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); white-space:nowrap; }
+  .buscador-count{ font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); white-space:nowrap; }
 
   .config-list{
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    overflow:hidden; box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-md);
+    overflow:hidden; box-shadow:var(--sh-2);
   }
   .config-row{
     padding:16px 22px; border-bottom:1px solid var(--line);
@@ -87,35 +91,35 @@
     opacity:0; animation:fadeUp .35s var(--ease) forwards;
   }
   .config-row:last-child{ border-bottom:none; }
-  .config-row .info .name{ font-size:14.5px; font-weight:700; }
-  .config-row .info .sub{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); margin-top:3px; }
+  .config-row .info .name{ font-size:var(--t-14); font-weight:700; }
+  .config-row .info .sub{ font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); margin-top:3px; }
   .config-chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
   .config-chip{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;
-    padding:3px 9px; border-radius:100px; background:#EAF3F7; color:var(--ink-soft);
+    font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.04em;
+    padding:3px 9px; border-radius:var(--r-pill); background:var(--n-100); color:var(--ink-soft);
   }
   .config-chip.destacado{ background:var(--petroleo-soft); color:var(--petroleo-deep); }
   .row-actions{ display:flex; gap:2px; flex-shrink:0; align-items:center; }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
-    font-family:'JetBrains Mono',monospace; font-size:11.5px;
+    font-family:var(--font-num); font-size:var(--t-12);
     cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
   }
-  .del-btn:hover{ color:#B0402D; }
-  .del-btn.edit-btn:hover{ color:var(--moss-deep); }
+  .del-btn:hover{ color:var(--err); }
+  .del-btn.edit-btn:hover{ color:var(--pet-600); }
 
   .config-empty{
     text-align:center; padding:36px 20px; color:var(--ink-faint);
-    font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.4px;
-    border:1px dashed var(--line); border-radius:12px; background:var(--paper-raised); display:none;
+    font-family:var(--font-num); font-size:var(--t-12); letter-spacing:0;
+    border:1px dashed var(--line); border-radius:var(--r-md); background:var(--paper-raised); display:none;
   }
   .config-empty.show{ display:block; }
 
   #loading{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+    font-family:var(--font-num); font-size:var(--t-13); color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:20px 0;
   }
-  .dot{width:7px;height:7px;background:var(--moss);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--pet-200);border-top-color:var(--pet-600);animation:spin .7s linear infinite;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 </style>
 </head>
@@ -184,7 +188,7 @@
       <div id="formTerceros" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormTerceros">Agregar / marcar un tercero</h3>
-          <button type="button" class="btn ghost" id="btnCancelarTercero" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
+          <button type="button" class="btn ghost" id="btnCancelarTercero" style="display:none; padding:8px 14px; font-size:var(--t-13);">Cancelar edición</button>
         </div>
         <div class="form-row cols-3">
           <div class="field">
@@ -217,6 +221,10 @@
             <input type="checkbox" id="chkDeclaranteRenta">
             <span>Declarante de renta<span class="resp-desc">Usa la tarifa baja exacta en vez del rango bajo-alto</span></span>
           </label>
+          <label class="resp-check">
+            <input type="checkbox" id="chkArticulo383">
+            <span>Aplica Art. 383 ET (rentas de trabajo)<span class="resp-desc">Independiente sin 2+ empleados contratados para la actividad -- no se le sugiere honorarios/servicios (4%/6%/10%/11%), son regímenes excluyentes. No calcula la tabla progresiva del 383, solo avisa.</span></span>
+          </label>
         </div>
         <div class="field" style="margin-top:14px;">
           <label>Notas (opcional)</label>
@@ -245,7 +253,7 @@
       <div id="formIca" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormIca">Agregar tarifa de ICA</h3>
-          <button type="button" class="btn ghost" id="btnCancelarIca" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
+          <button type="button" class="btn ghost" id="btnCancelarIca" style="display:none; padding:8px 14px; font-size:var(--t-13);">Cancelar edición</button>
         </div>
         <div class="form-row cols-4">
           <div class="field">
@@ -298,7 +306,7 @@
       <div id="formAprendida" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormAprendida">Enseñar una tarifa nueva</h3>
-          <button type="button" class="btn ghost" id="btnCancelarAprendida" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
+          <button type="button" class="btn ghost" id="btnCancelarAprendida" style="display:none; padding:8px 14px; font-size:var(--t-13);">Cancelar edición</button>
         </div>
         <div class="form-row cols-3">
           <div class="field">
@@ -364,6 +372,7 @@ const chkAutorretenedor = document.getElementById('chkAutorretenedor');
 const chkRegimenSimple = document.getElementById('chkRegimenSimple');
 const chkAgenteReteIva = document.getElementById('chkAgenteReteIva');
 const chkDeclaranteRenta = document.getElementById('chkDeclaranteRenta');
+const chkArticulo383 = document.getElementById('chkArticulo383');
 const inputTercNotas = document.getElementById('inputTercNotas');
 const btnGuardarTercero = document.getElementById('btnGuardarTercero');
 const btnCancelarTercero = document.getElementById('btnCancelarTercero');
@@ -382,6 +391,7 @@ function resetFormTercero(){
   chkRegimenSimple.checked = false;
   chkAgenteReteIva.checked = false;
   chkDeclaranteRenta.checked = false;
+  chkArticulo383.checked = false;
   inputTercNotas.value = '';
   editandoTercNit = null;
   tituloFormTerceros.textContent = 'Agregar / marcar un tercero';
@@ -403,6 +413,7 @@ function iniciarEdicionTercero(nit){
   chkRegimenSimple.checked = !!t.regimen_simple;
   chkAgenteReteIva.checked = !!t.agente_retencion_iva;
   chkDeclaranteRenta.checked = !!t.declarante_renta;
+  chkArticulo383.checked = !!t.aplica_articulo_383;
   inputTercNotas.value = t.notas || '';
   tituloFormTerceros.textContent = `Editar tercero -- NIT ${t.nit}`;
   btnGuardarTercero.textContent = 'Guardar cambios';
@@ -431,6 +442,7 @@ function renderTerceros(){
     if (t.regimen_simple) chips.push('<span class="config-chip destacado">Régimen Simple</span>');
     if (t.agente_retencion_iva) chips.push('<span class="config-chip destacado">Agente ReteIVA</span>');
     if (t.declarante_renta) chips.push('<span class="config-chip">Declarante de renta</span>');
+    if (t.aplica_articulo_383) chips.push('<span class="config-chip destacado">Art. 383 (rentas de trabajo)</span>');
     row.innerHTML = `
       <div class="info">
         <div class="name">NIT ${escapeHtml(t.nit)}${t.nombre ? ' -- ' + escapeHtml(t.nombre) : ''}</div>
@@ -474,6 +486,7 @@ btnGuardarTercero.addEventListener('click', async () => {
     regimen_simple: chkRegimenSimple.checked,
     agente_retencion_iva: chkAgenteReteIva.checked,
     declarante_renta: chkDeclaranteRenta.checked,
+    aplica_articulo_383: chkArticulo383.checked,
     notas: inputTercNotas.value.trim(),
   };
   btnGuardarTercero.disabled = true;
