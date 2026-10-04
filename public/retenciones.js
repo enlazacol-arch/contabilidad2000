@@ -369,7 +369,14 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // nadie lo marcó todavía, se sigue mostrando el rango como antes --
   // "no se sabe" nunca se trata como "no declara".
   const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta);
-  return { regimenSimple, autorretenedor, declaranteRenta };
+  // A diferencia de los tres de arriba, esto NO viene nunca de lo que
+  // la IA leyó en el documento (ningún documento "dice" si aplica el
+  // art. 383) -- depende por completo de la ficha de Terceros fiscales,
+  // donde el contador la marca a partir de la certificación que le da
+  // el contratista. Ver el comentario junto a esta bandera en
+  // calcularRetencionCategoriaLinea() más abajo.
+  const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383);
+  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
 }
 
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
@@ -426,11 +433,25 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 // Si no se pasa (undefined), se devuelve el rango bajo-alto tal cual,
 // para que el contador decida a mano (comportamiento de respaldo si
 // quien llama a esta función todavía no calculó el acumulado).
-function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta, acumuladoAnualPrevio) {
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta, acumuladoAnualPrevio, aplicaArticulo383) {
   tarifasAprendidas = tarifasAprendidas || {};
   const categoriaKey = String(categoria || '').toLowerCase();
   const configBase = TARIFAS_RETENCION[categoriaKey];
   if (!configBase) return null; // "otro" -- tarifa no confirmada, no adivinamos
+
+  // Art. 383 ET (rentas de trabajo) y honorarios/servicios (las tarifas
+  // fijas de esta tabla para 'honorarios_natural'/'servicios', art. 392)
+  // son dos regímenes EXCLUYENTES -- se aplica uno u otro, nunca los dos
+  // (Concepto DIAN 752 de 2023). Si el contador marcó este NIT como
+  // sujeto al 383 (ficha de Terceros fiscales -- normalmente porque el
+  // independiente certificó que no contrató 2+ personas para la
+  // actividad por 90+ días en el año), no se sugiere la tarifa fija de
+  // 4%/6%/10%/11% -- se avisa que aplica el 383 en su lugar, SIN
+  // calcular su tabla progresiva (eso es una tarifa por tramos de UVT
+  // bien distinta, fuera de alcance de este primer paso).
+  if (aplicaArticulo383 && (categoriaKey === 'honorarios_natural' || categoriaKey === 'servicios')) {
+    return { aplicaArticulo383: true, cuentaPUC: configBase.cuentaPUC, nombrePUC: configBase.nombrePUC };
+  }
 
   const subtotalNum = Number(subtotal) || 0;
   // El umbral SIEMPRE se prueba contra el valor bruto (subtotal de la
@@ -589,9 +610,17 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     // estos datos (nunca se sobrescribe si ya hay más de una).
     let categoriasConResultado = 0;
     let metaTarifaUnica = null;
+    let huboArticulo383 = false;
+    const categoriasArticulo383 = [];
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta, acumulados[categoriaParte]);
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta, acumulados[categoriaParte], perfil.aplicaArticulo383);
       if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
+      if (r.aplicaArticulo383) {
+        huboArticulo383 = true;
+        categoriasArticulo383.push(categoriaParte);
+        cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
+        continue; // no entra a bajo/alto -- el 383 no se calcula acá
+      }
       categoriasConResultado++;
       if (categoriasConResultado === 1 && r.tarifaAplicada !== undefined) {
         metaTarifaUnica = {
@@ -619,9 +648,11 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
       if (!r.mismaTarifa) mismaTarifaEnTodas = false;
       cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
     }
-    if (!huboAlguno && !faltaAiuEnAlguna) return null; // ninguna de las partes superó su umbral
+    if (!huboAlguno && !faltaAiuEnAlguna && !huboArticulo383) return null; // ninguna de las partes superó su umbral
     return {
       bajo: bajoTotal, alto: altoTotal, mismaTarifa: mismaTarifaEnTodas,
+      aplicaArticulo383: huboArticulo383,
+      categoriasArticulo383,
       cuentasPUC: [...cuentasInvolucradas.entries()].map(([cuenta, nombre]) => ({ cuenta, nombre })),
       // Si esto es true, `bajo`/`alto` son un total PARCIAL -- falta el
       // AIU de las categorías en `categoriasFaltantesAiu` para completar
@@ -635,8 +666,17 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
 
   // Sin desglose -- factura de una sola categoría, comportamiento normal.
   const categoriaHeader = String(inv.categoria_concepto || '').toLowerCase();
-  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu, perfil.declaranteRenta, acumulados[categoriaHeader]);
+  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu, perfil.declaranteRenta, acumulados[categoriaHeader], perfil.aplicaArticulo383);
   if (!r) return null;
+  if (r.aplicaArticulo383) {
+    return {
+      bajo: 0, alto: 0, mismaTarifa: true,
+      aplicaArticulo383: true,
+      categoriasArticulo383: [inv.categoria_concepto],
+      cuentasPUC: [{ cuenta: r.cuentaPUC, nombre: r.nombrePUC }],
+      requiereAiu: false, categoriasFaltantesAiu: [],
+    };
+  }
   if (r.requiereAiu) {
     return {
       bajo: 0, alto: 0, mismaTarifa: true,
@@ -705,10 +745,11 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   let bajoTotal = 0, altoTotal = 0, mismaTarifaEnTodas = true;
   const cuentasInvolucradas = new Map();
   const itemsFaltantesAiu = [];
+  const itemsArticulo383 = [];
   const acumuladoCorrido = { ...acumulados }; // copia -- se va actualizando ítem a ítem, sin tocar el objeto original
   const porItem = items.map((item, idx) => {
     const categoriaKey = String(item.categoria_concepto || '').toLowerCase();
-    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu, perfil.declaranteRenta, acumuladoCorrido[categoriaKey]);
+    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu, perfil.declaranteRenta, acumuladoCorrido[categoriaKey], perfil.aplicaArticulo383);
     if (esCategoriaCriterioAcumulado(categoriaKey)) {
       // Se suma el subtotal de ESTE ítem para el siguiente de la misma
       // categoría en esta factura, sin importar si con el dato de hoy
@@ -718,6 +759,11 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
       acumuladoCorrido[categoriaKey] = (acumuladoCorrido[categoriaKey] || 0) + (Number(item.subtotal) || 0);
     }
     if (!r) return null;
+    if (r.aplicaArticulo383) {
+      itemsArticulo383.push({ idx, descripcion: item.descripcion || '' });
+      cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
+      return r;
+    }
     if (r.requiereAiu) {
       itemsFaltantesAiu.push({ idx, descripcion: item.descripcion || '', subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });
       cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
@@ -734,6 +780,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
     porItem, bajo: bajoTotal, alto: altoTotal, mismaTarifa: mismaTarifaEnTodas,
     cuentasPUC: [...cuentasInvolucradas.entries()].map(([cuenta, nombre]) => ({ cuenta, nombre })),
     requiereAiu: itemsFaltantesAiu.length > 0, itemsFaltantesAiu,
+    aplicaArticulo383: itemsArticulo383.length > 0, itemsArticulo383,
   };
 }
 

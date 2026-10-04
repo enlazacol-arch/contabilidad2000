@@ -91,7 +91,7 @@ test('perfilFiscalEfectivo: el perfil guardado en terceros fiscales aplica aunqu
   const perfilTercero = { regimen_simple: true, autorretenedor: true, declarante_renta: true };
   const inv = {}; // esta factura puntual no trae ninguna marca -- debe igual ganar por la ficha de terceros
   const efectivo = perfilFiscalEfectivo(inv, perfilTercero);
-  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true });
+  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false });
 });
 
 test('perfilFiscalEfectivo: sin perfil de tercero, cae a lo leído de la factura puntual', () => {
@@ -194,6 +194,41 @@ test('honorarios_natural: declarante_renta NO cambia nada -- este criterio ignor
   assert.equal(r.bajo, Math.round(5000000 * 0.10));
   assert.equal(r.alto, Math.round(5000000 * 0.11));
 });
+
+// ---------- calcularRetencionSugerida: Art. 383 ET (rentas de trabajo) ----------
+// Mutuamente excluyente con honorarios/servicios (Concepto DIAN 752 de
+// 2023) -- si el contador marcó este NIT como sujeto al 383 en la ficha
+// de Terceros fiscales, no se debe sugerir la tarifa fija de
+// honorarios_natural (10%/11%) ni de servicios (4%/6%).
+
+test('honorarios_natural: con aplica_articulo_383 marcado, NO sugiere 10%/11% -- avisa que aplica 383', () => {
+  const inv = { categoria_concepto: 'honorarios_natural', valor_sin_iva: 5000000, nit_cc: '10203040', fecha_factura: '01/09/2026' };
+  const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, { aplica_articulo_383: true }, {});
+  assert.equal(r.aplicaArticulo383, true);
+  assert.equal(r.bajo, 0);
+  assert.equal(r.alto, 0);
+});
+
+test('servicios: con aplica_articulo_383 marcado, NO sugiere 4%/6% -- avisa que aplica 383', () => {
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 5000000, nit_cc: '10203040', fecha_factura: '01/09/2026' };
+  const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, { aplica_articulo_383: true }, {});
+  assert.equal(r.aplicaArticulo383, true);
+});
+
+test('compras: aplica_articulo_383 marcado NO afecta esta categoría -- el 383 solo aplica a honorarios/servicios de persona natural', () => {
+  const inv = { categoria_concepto: 'compras', valor_sin_iva: 5000000, nit_cc: '10203040', fecha_factura: '01/09/2026' };
+  const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, { aplica_articulo_383: true }, {});
+  assert.equal(r.aplicaArticulo383, undefined);
+  assert.equal(r.bajo, Math.round(5000000 * 0.025));
+});
+
+test('honorarios_natural: sin la marca aplica_articulo_383, sigue sugiriendo el rango 10%-11% de siempre', () => {
+  const inv = { categoria_concepto: 'honorarios_natural', valor_sin_iva: 5000000, nit_cc: '10203040', fecha_factura: '01/09/2026' };
+  const r = calcularRetencionSugerida(inv, clienteRetenedor, {}, { aplica_articulo_383: false }, {});
+  assert.equal(r.aplicaArticulo383, undefined);
+  assert.equal(r.bajo, Math.round(5000000 * 0.10));
+});
+
 
 // ---------- calcularRetencionSugerida: categorías con base especial AIU ----------
 

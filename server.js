@@ -446,6 +446,13 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_terceros_fiscales_contador ON terceros_fiscales (contador_id);`);
+  // Art. 383 ET (rentas de trabajo) es un régimen EXCLUYENTE con
+  // honorarios/servicios (4%/6%/10%/11%, Concepto DIAN 752 de 2023) --
+  // el contador marca esto por NIT cuando el independiente certificó que
+  // no contrató 2+ personas para la actividad por 90+ días en el año.
+  // Ver calcularRetencionCategoriaLinea() en retenciones.js, que es
+  // donde esta marca deja de sugerir la tarifa fija.
+  await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS aplica_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
 
   // PUC personalizado por cliente -- algunos contadores llevan la
   // contabilidad de un cliente puntual en OTRO sistema (ej. Contaia) que
@@ -2421,13 +2428,16 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 // tipo_doc/tipo_movimiento/cliente_id/file_hash y similares (cambiarlos
 // después de guardada abriría más problemas de los que resuelve; para
 // eso existe borrar y volver a escanear).
-// A propósito deja AFUERA nit_cc y nombre_razon_social -- identifican
-// quién emitió el documento (dato del documento físico, no una
-// clasificación que el contador decide), y dejarlos editables podría
-// reasignar sin querer una factura a otro tercero, desalineando tarifas
-// ya aprendidas para ese proveedor y la trazabilidad fiscal del
-// documento. Si esos dos datos quedaron mal leídos, la salida es borrar
-// la factura y volver a escanearla/digitarla -- no corregirlos acá.
+// A propósito deja AFUERA nit_cc y nombre_razon_social de ESTE PUT
+// genérico -- identifican quién emitió el documento (dato del documento
+// físico, no una clasificación que el contador decide), y dejarlos
+// editables en silencio acá podría reasignar sin querer una factura a
+// otro tercero. Para el caso real de un NIT mal leído o mal digitado
+// (ej. el contador escribió el nombre por error en el campo NIT), existe
+// el endpoint aparte y deliberado PATCH /api/invoices/:id/nit (ver más
+// abajo) -- no este PUT. Si lo que quedó mal es otra cosa (ej. se leyó
+// el documento de otro proveedor por completo), la salida sigue siendo
+// borrar la factura y volver a escanearla/digitarla.
 const CAMPOS_EDITABLES_FACTURA = [
   'dv', 'fecha_factura', 'concepto',
   'categoria_concepto', 'subcuenta_gasto',
@@ -2602,6 +2612,57 @@ app.patch('/api/invoices/:id/tipo-movimiento', requireAuth, requireRole('adminis
   } catch (err) {
     console.error('Error corrigiendo tipo_movimiento:', err);
     res.status(500).json({ error: 'No se pudo corregir el tipo de movimiento.' });
+  }
+});
+
+// Igual criterio que el endpoint de arriba (/tipo-movimiento) -- corregir
+// el NIT/cédula o el nombre del proveedor después de guardada la factura
+// es una acción APARTE y deliberada, nunca un campo más del PUT genérico
+// de abajo (ver el comentario de CAMPOS_EDITABLES_FACTURA). A diferencia
+// de tipo_movimiento, nit_cc/nombre_razon_social no tienen ninguna
+// cascada que deshacer: el asiento contable no depende del NIT, y las
+// tarifas ya aprendidas (tarifa_proveedor_aprendida) viven en su propia
+// tabla por NIT + categoría -- no referencian la factura, así que
+// corregir el NIT acá no las mueve ni las rompe. El único cuidado real
+// es no dejar que se repita el error que originó este endpoint: exige
+// que nit_cc quede solo con dígitos (o vacío, para el caso real de un
+// documento que de verdad no trae NIT) -- nunca un nombre ni texto
+// suelto escrito ahí por accidente.
+app.patch('/api/invoices/:id/nit', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const nuevoNit = String(req.body.nit_cc ?? '').trim();
+    if (nuevoNit !== '' && !/^\d+$/.test(nuevoNit)) {
+      return res.status(400).json({ error: 'El NIT/cédula solo puede tener dígitos (sin letras, puntos ni guiones) -- si el documento de verdad no trae uno legible, déjalo vacío.' });
+    }
+    const nuevoNombreCrudo = req.body.nombre_razon_social;
+    const nuevoNombre = nuevoNombreCrudo !== undefined ? String(nuevoNombreCrudo).trim() : undefined;
+    if (nuevoNombre !== undefined && nuevoNombre === '') {
+      return res.status(400).json({ error: 'El nombre/razón social no puede quedar vacío.' });
+    }
+
+    const previa = await pool.query('SELECT id, cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (previa.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
+    if (req.clientesAsignados && !puedeAccederCliente(req, previa.rows[0].cliente_id)) {
+      return res.status(404).json({ error: 'Factura no encontrada.' });
+    }
+
+    const sets = ['nit_cc = $1'];
+    const values = [nuevoNit];
+    let i = 2;
+    if (nuevoNombre !== undefined) {
+      sets.push(`nombre_razon_social = $${i}`);
+      values.push(nuevoNombre);
+      i++;
+    }
+    values.push(req.params.id, req.firmaId);
+    const actualizada = await pool.query(
+      `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i} AND contador_id = $${i + 1} RETURNING *`,
+      values
+    );
+    res.json(rowToInvoice(actualizada.rows[0]));
+  } catch (err) {
+    console.error('Error corrigiendo el NIT de la factura:', err);
+    res.status(500).json({ error: 'No se pudo corregir el NIT de la factura.' });
   }
 });
 
@@ -3306,7 +3367,7 @@ const CAMPOS_FACTURA_JSON = `{
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
   "nit_cc": "número de identificación (NIT o cédula) del proveedor/emisor, solo dígitos. Hay documentos reales que NO traen este número (ej. cuentas de cobro de una propiedad horizontal/conjunto residencial, donde en vez de un NIT aparece algo como 'Propiedad Horizontal' o el nombre del edificio) -- en esos casos deja este campo como cadena vacía. Nunca inventes un número ni tomes prestado uno de otra parte del documento (el consecutivo de la cuenta de cobro, la fecha, el NIT del adquiriente, etc.) -- si no hay un número de identificación real y propio del emisor, va vacío.",
   "dv": "dígito de verificación si aparece, si no aparece pon una cadena vacía",
-  "nombre_razon_social": "nombre o razón social del proveedor/emisor de la factura",
+  "nombre_razon_social": "nombre o razón social LEGAL del proveedor/emisor, asociado al NIT/cédula que anotaste en nit_cc -- no el nombre comercial, marca o logo del encabezado cuando sean distintos. Es un caso frecuente en cuentas de cobro e independientes: el logo/encabezado dice una marca o sigla (ej. 'IMB'), pero el bloque de datos del emisor (RUT, pie de página, firma) trae el nombre real de la persona o la razón social inscrita ante la DIAN (ej. 'Andrés Felipe Gómez') -- en ese caso usa SIEMPRE el nombre real asociado al NIT/cédula, nunca la marca o sigla del logo.",
   "letras_fe": "prefijo alfabético de la factura electrónica si existe (ej: FE, SETP), si no existe cadena vacía",
   "numeros_fe": "número o consecutivo de la factura electrónica, solo el número",
   "fecha_factura": "fecha de la factura en formato DD/MM/AAAA",
@@ -3366,7 +3427,7 @@ ${REGLAS_FORMATO_VALORES}`;
 // una factura vieja se ve mal leída, se sepa exactamente qué modelo y
 // qué versión del prompt la generó -- barato de dejar registrado ahora,
 // imposible de reconstruir después con precisión.
-const INVOICE_PROMPT_VERSION = 'v1';
+const INVOICE_PROMPT_VERSION = 'v2';
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -3442,6 +3503,49 @@ const CAMPOS_CON_CONFIANZA = [
 // de tumbar toda la extracción. Un campo ausente en el resultado final
 // significa "sin dato de confianza" (la futura pantalla de revisión no
 // debería resaltarlo ni como confiable ni como dudoso).
+// Siglas/abreviaturas de tipo de sociedad (y similares) que SIEMPRE se
+// dejan en mayúsculas al normalizar mayúsculas/minúsculas -- convertir
+// "S.A.S" a "S.a.s" quedaría peor que dejarlo todo en mayúsculas. Se
+// compara sin los puntos (una palabra como "S.A.S." o "SAS" cae en la
+// misma entrada de este set).
+const SIGLAS_SOCIEDAD = new Set([
+  'SAS', 'SA', 'LTDA', 'EU', 'SCA', 'SC', 'SENC', 'ESAL', 'CIA', 'NIT', 'ESP', 'IPS', 'IE',
+]);
+
+// Normaliza mayúsculas/minúsculas de un texto leído por la IA (nombre
+// del proveedor, concepto) -- varios documentos reales vienen TODO EN
+// MAYÚSCULAS (factura de imprenta antigua) y otros todo en minúsculas
+// (una cuenta de cobro escrita a mano/digitada en un Word sin revisar),
+// así que dos facturas del mismo tipo de proveedor terminaban viéndose
+// completamente distintas en Enlaza sin que el contador hubiera hecho
+// nada distinto al escanearlas.
+//
+// A propósito NO toca un texto que YA tiene may/min mezcladas -- eso
+// normalmente significa que el documento (o una corrección manual
+// previa) ya viene bien escrito ("Andrés Felipe Gómez"), y no hay
+// forma de "arreglar" eso sin arriesgarse a dañarlo (ej. apellidos con
+// mayúscula interna, siglas dentro del nombre). Solo interviene en el
+// caso claro: TODO mayúsculas o TODO minúsculas.
+function normalizarMayusculasTexto(texto) {
+  if (typeof texto !== 'string' || texto.trim() === '') return texto;
+  const tieneMinuscula = /[a-zñáéíóúü]/.test(texto);
+  const tieneMayuscula = /[A-ZÑÁÉÍÓÚÜ]/.test(texto);
+  if (tieneMinuscula && tieneMayuscula) return texto; // ya viene mezclado -- no se toca
+  if (!tieneMinuscula && !tieneMayuscula) return texto; // no tiene letras (solo números/símbolos)
+
+  return texto.split(' ').map((palabra) => {
+    if (palabra === '') return palabra;
+    const sinPuntos = palabra.replace(/\./g, '').toUpperCase();
+    if (SIGLAS_SOCIEDAD.has(sinPuntos)) return palabra.toUpperCase();
+    // Palabras muy cortas unidas por guion/apóstrofe (ej. "Mc'Donald",
+    // "Pérez-Gómez") -- Capitaliza cada tramo por separado.
+    return palabra.split('-').map((tramo) => {
+      if (tramo === '') return tramo;
+      return tramo.charAt(0).toUpperCase() + tramo.slice(1).toLowerCase();
+    }).join('-');
+  }).join(' ');
+}
+
 function sanitizarConfianzaCampos(crudo) {
   const limpio = {};
   if (!crudo || typeof crudo !== 'object' || Array.isArray(crudo)) return limpio;
@@ -3467,6 +3571,12 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
       parsed[key] = Math.round(Number(parsed[key]));
     }
   }
+
+  // Ver normalizarMayusculasTexto() arriba -- solo nombre_razon_social y
+  // concepto (los dos campos de texto libre que más se ven en pantalla),
+  // nunca nit_cc ni ningún valor numérico.
+  parsed.nombre_razon_social = normalizarMayusculasTexto(parsed.nombre_razon_social);
+  parsed.concepto = normalizarMayusculasTexto(parsed.concepto);
 
   parsed.confianza_campos = sanitizarConfianzaCampos(parsed.confianza_campos);
 
@@ -4171,7 +4281,7 @@ function normalizarNit(nit) {
 app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.firmaId]
     );
@@ -4193,25 +4303,27 @@ app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'co
     const regimenSimple = !!req.body.regimen_simple;
     const agenteRetencionIva = !!req.body.agente_retencion_iva;
     const declaranteRenta = !!req.body.declarante_renta;
+    const aplicaArticulo383 = !!req.body.aplica_articulo_383;
 
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
-    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !nombre && !notas) {
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !nombre && !notas) {
       await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
-      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, notas: '', borrado: true });
+      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, aplica_articulo_383: false, notas: '', borrado: true });
     }
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (contador_id, nit) DO UPDATE SET
          nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
          autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
          agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
+         aplica_articulo_383 = EXCLUDED.aplica_articulo_383,
          notas = EXCLUDED.notas, updated_at = now()
-       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at`,
-      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, notas]
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
+      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas]
     );
     res.json(rows[0]);
   } catch (err) {
