@@ -6,48 +6,49 @@
 <title>Enlaza — Política de Privacidad</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
 <style>
   :root{
-    --paper:#F6FAFC; --paper-raised:#FFFFFF; --line:#DCE7EC;
-    --ink:#1D2A32; --ink-soft:#4A5E68; --ink-faint:#8AA0AC;
-    --petroleo:#0B4F6C; --petroleo-deep:#083A4F;
-    --ember:#FF5A36; --ember-deep:#D8431F;
+    --paper:var(--n-50); --paper-raised:#FFFFFF; --line:var(--n-200);
+    --ink:var(--n-900); --ink-soft:var(--n-700); --ink-faint:var(--n-500);
+    --petroleo:var(--pet-600); --petroleo-deep:var(--pet-800);
+    --ember:var(--egreso-fill); --ember-deep:var(--egreso);
   }
   *{box-sizing:border-box;}
   body{
     background:var(--paper); color:var(--ink);
-    font-family:'Inter',-apple-system,sans-serif;
+    font-family:var(--font-ui);
     margin:0; padding:50px 20px 90px;
     line-height:1.7;
   }
-  .wrap{ max-width:680px; margin:0 auto; background:var(--paper-raised); border:1px solid var(--line); border-radius:16px; padding:44px 46px; box-shadow:0 30px 60px -28px rgba(13,30,40,0.16); }
+  .wrap{ max-width:680px; margin:0 auto; background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--r-lg); padding:44px 46px; box-shadow:var(--sh-2); }
   @media (max-width:560px){ .wrap{ padding:32px 24px; } }
   a{ color:var(--petroleo-deep); }
   .back{
     display:inline-block; margin-bottom:28px;
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; letter-spacing:.05em;
+    font-family:var(--font-num); font-size:var(--t-12); letter-spacing:.05em;
     text-transform:uppercase; text-decoration:none; color:var(--ink-faint);
   }
   .back:hover{ color:var(--petroleo-deep); }
   h1{
-    font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
+    font-family:var(--font-display); font-weight:900; letter-spacing:-0.02em;
     font-size:2rem; margin:0 0 6px; color:var(--ink);
   }
   .updated{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint);
+    font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint);
     margin-bottom:36px; letter-spacing:.03em;
   }
   h2{
-    font-family:'Archivo',sans-serif; font-weight:800; font-size:1.15rem;
+    font-family:var(--font-display); font-weight:800; font-size:1.15rem;
     margin:38px 0 12px; letter-spacing:-0.01em; color:var(--ink);
   }
   h3{ font-size:1rem; margin:22px 0 8px; color:var(--ink-soft); }
-  p, li{ color:var(--ink-soft); font-size:14.5px; }
+  p, li{ color:var(--ink-soft); font-size:var(--t-14); }
   strong{ color:var(--ink); }
-  table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px; }
+  table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:var(--t-14); }
   th, td{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); color:var(--ink-soft); }
-  th{ color:var(--ink); font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  th{ color:var(--ink); font-family:var(--font-num); font-size:var(--t-12); text-transform:uppercase; letter-spacing:.04em; }
   .fill{ color:var(--ember-deep); font-style:italic; }
 </style>
 </head>
