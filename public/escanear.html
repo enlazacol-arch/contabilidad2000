@@ -2270,6 +2270,7 @@ function actualizarEstimadosRetencion(){
     fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
     autorretenedor: currentAutorretenedor,
+    solicita_articulo_383: !!(currentInvoiceData && (currentInvoiceData.solicita_articulo_383 === true || currentInvoiceData.solicita_articulo_383 === 'true')),
     desglose_categorias: currentDesgloseCategorias,
     desglose_aiu: (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {},
   };
@@ -2301,7 +2302,7 @@ function actualizarEstimadosRetencion(){
       // de honorarios/servicios acá (son regímenes excluyentes). Se deja
       // el campo tal cual esté (nunca se pisa solo) y se avisa para que
       // el contador calcule el 383 aparte.
-      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (rentas de trabajo), marcado en su ficha de Terceros fiscales -- no corresponde la tarifa fija de honorarios/servicios. Calcula la retención por la tabla del 383 aparte (este sistema todavía no la automatiza) y escríbela directo en Rete Fuente.';
+      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (rentas de trabajo), según el documento o su ficha de Terceros fiscales -- no corresponde la tarifa fija de honorarios/servicios. Calcula la retención por la tabla del 383 aparte (este sistema todavía no la automatiza) y escríbela directo en Rete Fuente.';
       estFuenteEl.classList.add('show');
     } else if (sugerido && sugerido.requiereAiu) {
       // NUNCA se aplica solo ni se muestra como "coincide" -- bajo/alto
@@ -2710,7 +2711,7 @@ function showRetencionHint(data){
 
   if (sugerido && sugerido.aplicaArticulo383) {
     html = `<b>⚠ Este proveedor aplica Art. 383 ET (rentas de trabajo)</b>` +
-      `Está marcado en su ficha de Terceros fiscales -- por la regla de exclusión mutua entre el 383 y honorarios/servicios (Concepto DIAN 752 de 2023), NO corresponde la tarifa fija de 4%/6%/10%/11%. ` +
+      `Lo indica el documento o su ficha de Terceros fiscales -- por la regla de exclusión mutua entre el 383 y honorarios/servicios (Concepto DIAN 752 de 2023), NO corresponde la tarifa fija de 4%/6%/10%/11%. ` +
       (reteIvaAplicaAviso ? `Sí podría corresponder <b>Rete IVA</b> aparte.${reteIvaTexto} ` : '') +
       `<span class="fine">Este sistema todavía no calcula la tabla progresiva del art. 383 -- calcúlala aparte. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
@@ -2842,6 +2843,7 @@ function renderItemsPanel(){
     fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
     autorretenedor: currentAutorretenedor,
+    solicita_articulo_383: !!(currentInvoiceData && (currentInvoiceData.solicita_articulo_383 === true || currentInvoiceData.solicita_articulo_383 === 'true')),
   };
   const cliente = myClients.find(c => c.id === currentClienteId);
   const perfilTercero = perfilFiscalDelNit(invParaCalculo.nit_cc);
@@ -3058,6 +3060,7 @@ function currentFieldValues(){
   out.cliente_id = currentClienteId || '';
   out.regimen_simple = currentRegimenSimple;
   out.autorretenedor = currentAutorretenedor;
+  out.solicita_articulo_383 = !!(currentInvoiceData && (currentInvoiceData.solicita_articulo_383 === true || currentInvoiceData.solicita_articulo_383 === 'true'));
   // Se guardan tal cual los detectó la IA -- son solo avisos informativos
   // (ver banner arriba), no cambian ningún cálculo, pero conviene que
   // queden en el historial de la factura por si se necesita revisar después.

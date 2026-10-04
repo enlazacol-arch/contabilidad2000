@@ -354,3 +354,24 @@ test('autoCompletarAiuDesdeDescripcion: no hace nada si la descripción no menci
   assert.equal(items[0].aiu, '');
 });
 
+
+// ---------- Art. 383 detectado en el documento ----------
+// Reporte de la revisora (oct. 2026): una cuenta de cobro que dice
+// "practicar la retención con la tabla del artículo 383" no debe recibir
+// la tarifa fija de 4%/6%/10%/11%, aunque el NIT no esté marcado en
+// Terceros fiscales.
+test('perfilFiscalEfectivo: el Art. 383 puede venir del documento leído', () => {
+  const r = require('../public/retenciones');
+  assert.equal(r.perfilFiscalEfectivo({ solicita_articulo_383: true }, null).aplicaArticulo383, true);
+  assert.equal(r.perfilFiscalEfectivo({ solicita_articulo_383: 'true' }, null).aplicaArticulo383, true);
+  assert.equal(r.perfilFiscalEfectivo({}, null).aplicaArticulo383, false);
+  assert.equal(r.perfilFiscalEfectivo({}, { aplica_articulo_383: true }).aplicaArticulo383, true);
+});
+
+test('calcularRetencionSugerida: honorarios con Art. 383 en el documento no sugiere tarifa fija', () => {
+  const r = require('../public/retenciones');
+  const inv = { categoria_concepto: 'honorarios_natural', valor_sin_iva: 3650000, valor_iva: 0, nit_cc: '71261773', fecha_factura: '17/07/2026', solicita_articulo_383: true };
+  const sugerido = r.calcularRetencionSugerida(inv, { agente_retenedor: true }, {}, null);
+  assert.ok(!sugerido || sugerido.aplicaArticulo383 === true);
+  assert.ok(!sugerido || !(sugerido.bajo > 0));
+});

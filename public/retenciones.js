@@ -369,13 +369,15 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // nadie lo marcó todavía, se sigue mostrando el rango como antes --
   // "no se sabe" nunca se trata como "no declara".
   const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta);
-  // A diferencia de los tres de arriba, esto NO viene nunca de lo que
-  // la IA leyó en el documento (ningún documento "dice" si aplica el
-  // art. 383) -- depende por completo de la ficha de Terceros fiscales,
-  // donde el contador la marca a partir de la certificación que le da
-  // el contratista. Ver el comentario junto a esta bandera en
-  // calcularRetencionCategoriaLinea() más abajo.
-  const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383);
+  // Art. 383: lo marca el contador en la ficha de Terceros fiscales (a
+  // partir de la certificación del contratista), o lo detecta la IA
+  // cuando el propio documento lo dice -- muchas cuentas de cobro de
+  // independientes traen escrito "practicar la retención con la tabla
+  // del artículo 383" o la certificación de no haber contratado 2 o más
+  // trabajadores (inv.solicita_articulo_383). Ver el comentario junto a
+  // esta bandera en calcularRetencionCategoriaLinea() más abajo.
+  const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
+    inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true';
   return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
 }
 

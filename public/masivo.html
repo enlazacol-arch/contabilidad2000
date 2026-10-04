@@ -706,7 +706,7 @@ function calcularFilaRetencionSugeridaHtml(item){
   if (sugerido && sugerido.aplicaArticulo383) {
     contenido = `
       <div class="fd-label">Retención sugerida</div>
-      <div class="fd-value">⚠ Este proveedor aplica Art. 383 ET (ficha de Terceros fiscales) -- no corresponde la tarifa fija de honorarios/servicios. Calcula el 383 aparte.</div>
+      <div class="fd-value">⚠ Este proveedor aplica Art. 383 ET (lo dice el documento o la ficha de Terceros fiscales) -- no corresponde la tarifa fija de honorarios/servicios. Calcula el 383 aparte.</div>
     `;
   } else if (sugerido && sugerido.requiereAiu) {
     // No mostrar bajo/alto -- es un total PARCIAL (falta el AIU de al
@@ -1227,7 +1227,7 @@ function actualizarEstimadosRetencionMasivo(){
       // Igual que en Escanear -- nunca se auto-aplica ni se sugiere la
       // tarifa fija de honorarios/servicios para un proveedor marcado
       // con el Art. 383 (regímenes excluyentes, Concepto DIAN 752/2023).
-      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (ficha de Terceros fiscales) -- no corresponde la tarifa fija de honorarios/servicios. Calcula el 383 aparte y escríbelo directo en Rete Fuente.';
+      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (lo dice el documento o la ficha de Terceros fiscales) -- no corresponde la tarifa fija de honorarios/servicios. Calcula el 383 aparte y escríbelo directo en Rete Fuente.';
       estFuenteEl.classList.add('show');
     } else if (sugerido && sugerido.requiereAiu) {
       // Nunca se ofrece un botón "Usar" acá -- bajo/alto son un total
@@ -2172,6 +2172,7 @@ function construirPayloadFactura(item){
     tipo_movimiento: item.tipoMovimiento, adquiriente_nit: d.adquiriente_nit || '', adquiriente_nombre: d.adquiriente_nombre || '',
     cliente_id: item.clienteId || '',
     regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
+    solicita_articulo_383: d.solicita_articulo_383 === true || d.solicita_articulo_383 === 'true',
     autorretenedor: d.autorretenedor === true || d.autorretenedor === 'true',
     desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
     desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),

@@ -163,6 +163,8 @@ async function ensureSchema() {
   // debe practicar retención en la fuente ni ReteICA sobre esa factura
   // (ver perfilFiscalEfectivo() en public/retenciones.js).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor BOOLEAN DEFAULT false;`);
+  // El documento pide aplicar la tabla del art. 383 ET (lo detecta la IA).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS solicita_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
   // Número de digitación/comprobante -- lo escribe el contador cuando YA
   // registró esta factura en su propio software contable (Siigo, Alegra,
   // World Office, etc.). Mientras esté vacío, la factura se puede seguir
@@ -1571,7 +1573,7 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
+  'regimen_simple', 'autorretenedor', 'solicita_articulo_383', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
   'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
   'confianza_campos', 'modelo_ia', 'version_prompt', 'valor_letras_texto', 'valor_letras_numero',
   'archivo_original', 'archivo_original_tipo',
@@ -2303,7 +2305,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       // tarifa_ica_id es de tipo UUID igual que cliente_id -- mismo tratamiento.
       if (key === 'tarifa_ica_id') return val === '' ? null : val;
       // Estos campos son de tipo BOOLEAN -- convertir explícitamente.
-      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
+      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'solicita_articulo_383' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
         return val === true || val === 'true';
       }
       // confianza_campos es un objeto {campo: 0-1} -- se guarda como TEXT
@@ -3396,6 +3398,7 @@ const CAMPOS_FACTURA_JSON = `{
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
   "autorretenedor": "true si el documento menciona explícitamente que el emisor es 'Autorretenedor' (de renta y/o de ICA) -- es muy común en facturas de servicios públicos (EPM y similares suelen imprimirlo en letra pequeña cerca del NIT del emisor, ej. 'Autorretenedor Renta -- Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO debe practicar retención en la fuente ni ReteICA sobre esta factura -- el proveedor ya se autorretiene y se la gira directamente a la DIAN/municipio.",
+  "solicita_articulo_383": "true SOLO si el documento (casi siempre una cuenta de cobro de una persona natural) dice explícitamente que la retención en la fuente se debe calcular con la tabla del artículo 383 del Estatuto Tributario, o certifica que el emisor NO contrató o vinculó dos o más trabajadores para su actividad (rentas de trabajo). false en cualquier otro caso, incluido cuando no estés seguro.",
   "saldo_vencido_detectado": "true SOLO si el documento muestra explícitamente un 'saldo vencido', 'deuda anterior', 'saldo anterior pendiente' o similar (frecuente en facturas de servicios públicos que arrastran periodos sin pagar) -- es decir, el 'total a pagar' del documento incluye algo más que el consumo/servicio de ESTE periodo. false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si ese saldo anterior ya fue pagado antes de registrar el gasto.",
   "anticipo_detectado": "true SOLO si el documento menciona explícitamente un anticipo o avance ya entregado/descontado (ej. 'anticipo del 50% ya cancelado', 'menos avance recibido'). false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si el total de la factura ya descuenta ese anticipo.",
   "valor_abonado_detectado": "SOLO si el documento indica un valor EXACTO ya abonado/anticipado/pagado sobre el total (ej. 'de los cuales se han abonado $20.000.000', 'anticipo recibido: $5.000.000'), ese valor en pesos ENTEROS. Si el documento menciona un anticipo pero SIN dar el valor exacto, o no menciona ningún abono, usa 0 -- no calcules ni asumas un porcentaje.",
