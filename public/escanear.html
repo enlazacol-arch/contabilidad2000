@@ -912,6 +912,17 @@ async function loadTarifasAprendidas(){
   }
 }
 
+// Subcuenta usada antes con cada proveedor (ver subcuentaAprendida() en
+// retenciones.js) -- la próxima factura de ese proveedor ya llega con ella.
+async function loadSubcuentasAprendidas(){
+  try {
+    const res = await fetch('/api/subcuentas-aprendidas');
+    if (res.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await res.json());
+  } catch (e) {
+    console.warn('No se pudieron cargar las subcuentas aprendidas:', e.message);
+  }
+}
+
 // Perfil fiscal por NIT (Gran Contribuyente / Autorretenedor / Régimen
 // Simple / Agente de retención de IVA) que el contador ya marcó antes
 // para ese tercero -- manda sobre lo que la IA lea en la factura de
@@ -977,6 +988,7 @@ async function requireAuthAndInit(){
     await loadMyClients();
     aplicarClientePreseleccionado();
     loadTarifasAprendidas();
+    loadSubcuentasAprendidas();
     loadTercerosFiscales();
     loadTarifasIca();
     await restaurarColaDesdeDB();
@@ -2047,6 +2059,7 @@ function renderResult(data){
           });
           agregarOpcionManual();
           currentSubcuentaGasto = opciones[0][0];
+          preseleccionarSubcuentaAprendida();
           return;
         }
 
@@ -2076,6 +2089,24 @@ function renderResult(data){
         // personalizado (es la razón por la que el contador lo
         // registró) -- sigue pudiendo cambiar al estándar con un clic.
         currentSubcuentaGasto = personalizados[0].codigo;
+        preseleccionarSubcuentaAprendida();
+      }
+      // Si con este proveedor ya se usó una subcuenta en esta categoría
+      // (ver subcuentaAprendida() en retenciones.js), esa queda
+      // preseleccionada -- la misma que reciben los ítems de la factura.
+      function preseleccionarSubcuentaAprendida(){
+        if (typeof subcuentaAprendida !== 'function') return;
+        const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+        const aprendida = subcuentaAprendida(nitInput ? nitInput.value : '', input.value);
+        if (!aprendida) return;
+        if (![...subSelect.options].some((o) => o.value === aprendida)) {
+          const opt = document.createElement('option');
+          opt.value = aprendida;
+          opt.textContent = `${aprendida} — usada antes con este proveedor`;
+          subSelect.insertBefore(opt, subSelect.firstChild);
+        }
+        subSelect.value = aprendida;
+        currentSubcuentaGasto = aprendida;
       }
       poblarSubcuentas(input.value);
       // Expuesto para que detectClient()/el selector manual de cliente

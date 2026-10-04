@@ -1963,9 +1963,15 @@ function renderSummary(){
     // este cliente todavía) no hay nada razonable que preseleccionar --
     // se deja en blanco y se pide la cuenta escrita a mano más abajo.
     const sinOpcionesSubcuenta = opcionesEstandarActual.length === 0 && personalizadosActual.length === 0;
-    const subcuentaActual = d.subcuenta_gasto || (personalizadosActual.length > 0 ? personalizadosActual[0].codigo : (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : ''));
+    // Subcuenta usada antes con este proveedor (ver subcuentaAprendida()
+    // en retenciones.js) -- va antes que la primera opción de la lista.
+    const aprendidaActual = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, categoriaActual) : '';
+    const subcuentaActual = d.subcuenta_gasto || aprendidaActual || (personalizadosActual.length > 0 ? personalizadosActual[0].codigo : (opcionesEstandarActual[0] ? opcionesEstandarActual[0][0] : ''));
     if (!d.subcuenta_gasto) d.subcuenta_gasto = subcuentaActual; // fijar el default la primera vez
-    const estandarOptsActualHTML = opcionesEstandarActual.map(([codigo, nombre]) =>
+    const aprendidaFueraDeLista = aprendidaActual && !opcionesEstandarActual.some(([c]) => c === aprendidaActual) && !personalizadosActual.some((p) => p.codigo === aprendidaActual);
+    const estandarOptsActualHTML = (aprendidaFueraDeLista
+      ? `<option value="${escapeHtml(aprendidaActual)}" ${aprendidaActual === subcuentaActual ? 'selected' : ''}>${escapeHtml(aprendidaActual)} — usada antes con este proveedor</option>` : '') +
+      opcionesEstandarActual.map(([codigo, nombre]) =>
       `<option value="${codigo}" ${codigo === subcuentaActual ? 'selected' : ''}>${codigo === 'inventario' ? nombre : codigo + ' — ' + nombre}</option>`
     ).join('');
     // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
@@ -2541,6 +2547,12 @@ async function requireAuthAndInit(){
       }
     } catch (e) {
       console.warn('No se pudieron cargar las tarifas aprendidas:', e.message);
+    }
+    try {
+      const subRes = await fetch('/api/subcuentas-aprendidas');
+      if (subRes.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await subRes.json());
+    } catch (e) {
+      console.warn('No se pudieron cargar las subcuentas aprendidas:', e.message);
     }
     try {
       const perfilesRes = await fetch('/api/terceros-fiscales');

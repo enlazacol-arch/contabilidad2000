@@ -2078,6 +2078,31 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
 // que el contador la vea, la corrija a mano si quedó mal aprendida, o
 // la aprenda desde cero sin esperar a guardar otra factura (pantalla
 // Configuración -- "Tarifas aprendidas por proveedor").
+// Última subcuenta de gasto usada con cada proveedor y categoría, en
+// facturas de egreso ya aprobadas -- Escanear y Carga masiva la usan
+// como subcuenta preseleccionada (ver subcuentaAprendida() en
+// public/retenciones.js). Clave: "NIT|categoria".
+app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (i.nit_cc, fi.categoria_concepto) i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto, i.cliente_id
+         FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
+        WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
+          AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
+        ORDER BY i.nit_cc, fi.categoria_concepto, i.saved_at DESC`,
+      [req.firmaId]
+    );
+    const mapa = {};
+    rows
+      .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
+      .forEach((r) => { mapa[`${normalizarNit(r.nit_cc)}|${String(r.categoria_concepto).toLowerCase()}`] = r.subcuenta_gasto; });
+    res.json(mapa);
+  } catch (err) {
+    console.error('Error leyendo subcuentas aprendidas:', err);
+    res.status(500).json({ error: 'No se pudieron leer las subcuentas aprendidas.' });
+  }
+});
+
 app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
