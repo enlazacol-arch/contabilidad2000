@@ -250,6 +250,7 @@ async function guardarResultadoDocumento(itemId, contadorId, doc) {
   );
   const clienteFijoId = loteRows.length > 0 ? loteRows[0].cliente_id : null;
   const deteccion = await detectarClienteYMovimientoServidor(contadorId, parsed, clienteFijoId);
+  if (deteccion.aviso) parsed.aviso_movimiento = deteccion.aviso;
   await pool.query(
     `UPDATE lote_items SET estado = $2, data = $3, cliente_id_detectado = $4, tipo_movimiento_detectado = $5 WHERE id = $1`,
     [itemId, deteccion.confiado ? 'listo' : 'revisar', JSON.stringify(parsed), deteccion.clienteId || null, deteccion.tipoMovimiento]
