@@ -2368,6 +2368,7 @@ const CAMPOS_PERFIL_FISCAL = [
   ['regimen_simple', 'Régimen Simple (RST)', 'Fuerza Rete Fuente y Rete ICA a $0. No exime de Rete IVA -- esa regla no cambia.'],
   ['agente_retencion_iva', 'Agente de retención de IVA', 'Informativo -- revisa si a este proveedor NO le corresponde que tu cliente le practique Rete IVA.'],
   ['declarante_renta', 'Declarante de renta', 'Cuando lo marcas, Enlaza usa la tarifa exacta de declarante en vez del rango bajo-alto en las categorías donde la tarifa depende de esto.'],
+  ['no_retener', 'No se le retiene', 'Enlaza no le propone Rete Fuente. Se marca sola al importar la contabilidad anterior del cliente o al guardar una factura sin retención con ese motivo.'],
 ];
 
 function renderPerfilTerceroPanel(nit, nombreSugerido){
@@ -2929,6 +2930,14 @@ function showRetencionHint(data){
     }
     html += `<span class="fine">Basado en el art. 911 del Estatuto Tributario y normativa vigente al construir esta app — no es asesoría tributaria, confirma con tu criterio profesional.</span>`;
     retencionHintEl.innerHTML = html;
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
+  if (perfilTercero && perfilTercero.no_retener && !esAutorretenedor) {
+    retencionHintEl.innerHTML = `<b>ℹ A este proveedor no se le retiene</b>` +
+      `Así está en la contabilidad anterior de tus clientes o lo marcaste antes (perfil fiscal del proveedor). Si cambió, desmárcalo en su perfil fiscal o en Configuración.` +
+      (reteIvaAplicaAviso ? ` Revisa si corresponde <b>Rete IVA</b> aparte.${reteIvaTexto}` : '');
     retencionHintEl.classList.add('show');
     return;
   }

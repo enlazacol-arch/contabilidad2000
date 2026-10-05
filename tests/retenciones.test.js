@@ -91,7 +91,7 @@ test('perfilFiscalEfectivo: el perfil guardado en terceros fiscales aplica aunqu
   const perfilTercero = { regimen_simple: true, autorretenedor: true, declarante_renta: true };
   const inv = {}; // esta factura puntual no trae ninguna marca -- debe igual ganar por la ficha de terceros
   const efectivo = perfilFiscalEfectivo(inv, perfilTercero);
-  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false });
+  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false, noRetener: false });
 });
 
 test('perfilFiscalEfectivo: sin perfil de tercero, cae a lo leído de la factura puntual', () => {

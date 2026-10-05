@@ -225,6 +225,10 @@
             <input type="checkbox" id="chkArticulo383">
             <span>Aplica Art. 383 ET (rentas de trabajo)<span class="resp-desc">Independiente sin 2+ empleados contratados para la actividad -- no se le sugiere honorarios/servicios (4%/6%/10%/11%), son regímenes excluyentes. No calcula la tabla progresiva del 383, solo avisa.</span></span>
           </label>
+          <label class="resp-check">
+            <input type="checkbox" id="chkNoRetener">
+            <span>No se le retiene<span class="resp-desc">Enlaza no le propone retención en la fuente. Se marca sola al importar la contabilidad anterior de un cliente (documentos sobre la base sin retención) o al guardar una factura sin retención con ese motivo.</span></span>
+          </label>
         </div>
         <div class="field" style="margin-top:14px;">
           <label>Notas (opcional)</label>
@@ -373,6 +377,7 @@ const chkRegimenSimple = document.getElementById('chkRegimenSimple');
 const chkAgenteReteIva = document.getElementById('chkAgenteReteIva');
 const chkDeclaranteRenta = document.getElementById('chkDeclaranteRenta');
 const chkArticulo383 = document.getElementById('chkArticulo383');
+const chkNoRetener = document.getElementById('chkNoRetener');
 const inputTercNotas = document.getElementById('inputTercNotas');
 const btnGuardarTercero = document.getElementById('btnGuardarTercero');
 const btnCancelarTercero = document.getElementById('btnCancelarTercero');
@@ -392,6 +397,7 @@ function resetFormTercero(){
   chkAgenteReteIva.checked = false;
   chkDeclaranteRenta.checked = false;
   chkArticulo383.checked = false;
+  chkNoRetener.checked = false;
   inputTercNotas.value = '';
   editandoTercNit = null;
   tituloFormTerceros.textContent = 'Agregar / marcar un tercero';
@@ -414,6 +420,7 @@ function iniciarEdicionTercero(nit){
   chkAgenteReteIva.checked = !!t.agente_retencion_iva;
   chkDeclaranteRenta.checked = !!t.declarante_renta;
   chkArticulo383.checked = !!t.aplica_articulo_383;
+  chkNoRetener.checked = !!t.no_retener;
   inputTercNotas.value = t.notas || '';
   tituloFormTerceros.textContent = `Editar tercero -- NIT ${t.nit}`;
   btnGuardarTercero.textContent = 'Guardar cambios';
@@ -443,6 +450,7 @@ function renderTerceros(){
     if (t.agente_retencion_iva) chips.push('<span class="config-chip destacado">Agente ReteIVA</span>');
     if (t.declarante_renta) chips.push('<span class="config-chip">Declarante de renta</span>');
     if (t.aplica_articulo_383) chips.push('<span class="config-chip destacado">Art. 383 (rentas de trabajo)</span>');
+    if (t.no_retener) chips.push('<span class="config-chip destacado">No se le retiene</span>');
     row.innerHTML = `
       <div class="info">
         <div class="name">NIT ${escapeHtml(t.nit)}${t.nombre ? ' -- ' + escapeHtml(t.nombre) : ''}</div>
@@ -487,6 +495,7 @@ btnGuardarTercero.addEventListener('click', async () => {
     agente_retencion_iva: chkAgenteReteIva.checked,
     declarante_renta: chkDeclaranteRenta.checked,
     aplica_articulo_383: chkArticulo383.checked,
+    no_retener: chkNoRetener.checked,
     notas: inputTercNotas.value.trim(),
   };
   btnGuardarTercero.disabled = true;

@@ -443,6 +443,10 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // cédulas de personas naturales no tienen esa forma (hasta 8 dígitos,
   // o 10 que empiezan por 1), así que para ellas sigue el rango.
   const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta) || esNitPersonaJuridica(inv.nit_cc);
+  // "A este proveedor no se le retiene": aprendido de la contabilidad
+  // anterior del cliente o marcado por la contadora (ver
+  // public/historial-contable.js). Como autorretenedor: sin retención.
+  const noRetener = !!(perfilTercero && perfilTercero.no_retener);
   // Art. 383: lo marca el contador en la ficha de Terceros fiscales (a
   // partir de la certificación del contratista), o lo detecta la IA
   // cuando el propio documento lo dice -- muchas cuentas de cobro de
@@ -453,7 +457,7 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
     inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true' ||
     NITS_ARTICULO_383.has(String(inv.nit_cc || '').replace(/-\s*\d$/, '').replace(/[^0-9]/g, ''));
-  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
+  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener };
 }
 
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
@@ -651,6 +655,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple) return null; // Régimen Simple -- Rete Fuente no aplica
   if (perfil.autorretenedor) return null; // el proveedor se autorretiene -- el comprador no debe practicar retención ordinaria
+  if (perfil.noRetener) return null; // a este proveedor no se le retiene (contabilidad anterior o decisión de la contadora)
 
   let desglose = null;
   try {
@@ -815,7 +820,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   acumulados = acumulados || {};
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
-  if (perfil.regimenSimple || perfil.autorretenedor) {
+  if (perfil.regimenSimple || perfil.autorretenedor || perfil.noRetener) {
     return { porItem: items.map(() => null), bajo: 0, alto: 0, mismaTarifa: true, cuentasPUC: [], requiereAiu: false, itemsFaltantesAiu: [] };
   }
 
@@ -991,18 +996,41 @@ function subcuentaPorHistorial(lista, texto, minimoCuentas = 2) {
 // `texto` (descripción del ítem), si con ese proveedor se usaron varias
 // cuentas, se escoge por concepto (ver subcuentaPorHistorial); si no, la
 // última usada.
+// Junta las listas del historial de varias claves (la de la categoría y
+// la '*' de la contabilidad importada), sumando las entradas de la misma
+// subcuenta.
+function unirHistorial(...listas) {
+  const porCuenta = new Map();
+  listas.filter(Array.isArray).forEach((lista) => lista.forEach((e) => {
+    const previa = porCuenta.get(e.subcuenta);
+    if (!previa) porCuenta.set(e.subcuenta, { ...e, raices: new Set(e.raices) });
+    else { e.raices.forEach((r) => previa.raices.add(r)); previa.veces += e.veces; previa.ultima = Math.max(previa.ultima, e.ultima); }
+  }));
+  return [...porCuenta.values()];
+}
+
 function subcuentaAprendida(nit, categoria, clienteId, texto) {
   const nitLimpio = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
   if (!nitLimpio || !categoria) return '';
-  const clave = `${nitLimpio}|${String(categoria).toLowerCase()}`;
-  const porConcepto = subcuentaPorHistorial((clienteId && HISTORIAL_SUBCUENTAS[`${clienteId}|${clave}`]) || HISTORIAL_SUBCUENTAS[clave], texto);
+  const cat = String(categoria).toLowerCase();
+  const clave = `${nitLimpio}|${cat}`;
+  // Cuentas usadas con este proveedor: en facturas de Enlaza (por
+  // categoría) y en la contabilidad anterior importada ('*').
+  const delProveedorLista = clienteId
+    ? unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|${clave}`], HISTORIAL_SUBCUENTAS[`${clienteId}|${nitLimpio}|*`])
+    : unirHistorial(HISTORIAL_SUBCUENTAS[clave]);
+  const porConcepto = subcuentaPorHistorial(delProveedorLista, texto);
   if (porConcepto) return porConcepto;
   const delProveedor = (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
   if (delProveedor) return delProveedor;
+  // Con este proveedor siempre se usó la misma cuenta (contabilidad importada).
+  if (delProveedorLista.length === 1) return delProveedorLista[0].subcuenta;
   // Proveedor nuevo para este cliente: lo que el cliente ya causó con un
   // concepto parecido, de cualquier proveedor (basta una cuenta que se
   // parezca al texto).
-  return clienteId ? subcuentaPorHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${String(categoria).toLowerCase()}`], texto, 1) : '';
+  return clienteId
+    ? subcuentaPorHistorial(unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${cat}`], HISTORIAL_SUBCUENTAS[`${clienteId}|*|*`]), texto, 1)
+    : '';
 }
 
 // ---------- AIU consolidado (vigilancia, aseo, temporales) ----------

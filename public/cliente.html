@@ -292,6 +292,19 @@
       <div id="facturasSinResultados" class="empty-note" style="display:none;">Ninguna factura coincide con el filtro.</div>
     </div>
 
+    <div class="chart-card" id="historialCard">
+      <div class="card-head">
+        <h2>Contabilidad anterior del cliente</h2>
+      </div>
+      <p class="puc-intro">Sube el <strong>Auxiliar General</strong> (o el Listado de Movimiento por Comprobante) que exporta su programa contable, ideal de los últimos 6 a 12 meses. Enlaza aprende de ahí, desde la primera factura: a qué cuenta va cada proveedor y cada concepto, a quién se le retiene y a quién no, y cómo se lleva el IVA. No hay que esperar a causar facturas en Enlaza para que el sistema conozca al cliente.</p>
+      <div class="puc-form-row">
+        <input type="file" id="historialArchivo" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="Archivo de contabilidad anterior">
+        <button class="btn primary" id="btnImportarHistorial" type="button">Leer y aprender</button>
+        <button class="btn btn--danger" id="btnBorrarHistorial" type="button" hidden>Borrar lo importado</button>
+      </div>
+      <div id="historialResumen" class="puc-import-resultado" style="display:none;"></div>
+    </div>
+
     <div class="chart-card" id="pucCard">
       <div class="card-head">
         <h2>Plan de cuentas (PUC) de este cliente</h2>
@@ -474,6 +487,7 @@ async function cargarYRenderizar(){
 
   // ---- PUC personalizado -- independiente de si ya tiene facturas ----
   cargarPuc(cliente);
+  cargarHistorialContable(cliente);
 
   // ---- Tarjetas ----
   const facturasCliente = allInvoices.filter(inv => inv.cliente_id === cliente.id);
@@ -1113,6 +1127,113 @@ document.getElementById('btnImportarPuc').addEventListener('click', async () => 
     btn.textContent = textoBotonOriginal;
   }
 });
+
+// ---------- Contabilidad anterior del cliente ----------
+// Lee el Excel/CSV en el navegador y manda las filas; el servidor
+// reconoce el formato y aprende (ver public/historial-contable.js).
+
+function pintarResumenHistorial(cliente, resumen){
+  const el = document.getElementById('historialResumen');
+  document.getElementById('btnBorrarHistorial').hidden = !resumen;
+  if (!resumen) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const fecha = resumen.importado_at ? new Date(resumen.importado_at).toLocaleDateString('es-CO') : '';
+  const lista = (arr, max) => arr.slice(0, max).map((x) => escapeHtml(x)).join(', ') + (arr.length > max ? ` y ${arr.length - max} más` : '');
+  const conRet = (resumen.con_retencion || []).map((r) => `${r.nombre} (${String(Math.round(r.tarifa * 1000) / 10).replace('.', ',')}% en ${r.cuenta})`);
+  const ivaPendiente = resumen.iva_cuentas_orden && !(cliente.iva_mayor_valor_gasto && cliente.iva_cuentas_orden);
+  el.style.display = 'block';
+  el.innerHTML = `<strong>Aprendido de ${escapeHtml(resumen.archivo || 'la contabilidad anterior')}</strong>${fecha ? ` (${fecha})` : ''}:
+    ${resumen.movimientos.toLocaleString('es-CO')} movimientos, <strong>${resumen.proveedores}</strong> proveedores con <strong>${resumen.cuentas}</strong> combinaciones de proveedor y cuenta.
+    ${resumen.no_retener.length ? `<br>No se les retiene (${resumen.no_retener.length}): ${lista(resumen.no_retener, 8)}.` : ''}
+    ${conRet.length ? `<br>Con retención: ${lista(conRet, 6)}.` : ''}
+    ${resumen.iva_cuentas_orden ? `<br>El IVA de las compras se controla en cuentas de orden (8395).${ivaPendiente ? ' <button type="button" class="btn btn--sm secondary" id="btnActivarIvaHistorial">Activar «IVA al gasto + cuentas de orden»</button>' : ' Ya está activado en este cliente.'}` : ''}`;
+  const btnIva = document.getElementById('btnActivarIvaHistorial');
+  if (btnIva) btnIva.onclick = async () => {
+    const cambios = { iva_mayor_valor_gasto: true, iva_cuentas_orden: true };
+    const res = await fetch(`/api/clients/${encodeURIComponent(cliente.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cambios) });
+    if (!res.ok) { Aviso.mostrar('No se pudo activar.', { tipo: 'error' }); return; }
+    Object.assign(cliente, cambios);
+    Aviso.mostrar('Listo: el IVA de sus compras irá al gasto y se controlará en cuentas de orden.');
+    cargarPuc(cliente);
+    pintarResumenHistorial(cliente, resumen);
+  };
+}
+
+function cargarHistorialContable(cliente){
+  let resumen = null;
+  try { resumen = cliente.historial_contable_resumen ? JSON.parse(cliente.historial_contable_resumen) : null; } catch (e) { resumen = null; }
+  pintarResumenHistorial(cliente, resumen);
+
+  document.getElementById('btnImportarHistorial').onclick = async () => {
+    const input = document.getElementById('historialArchivo');
+    const btn = document.getElementById('btnImportarHistorial');
+    const file = input.files && input.files[0];
+    if (!file) { Aviso.mostrar('Elige primero el archivo (Excel o CSV).', { tipo: 'error' }); return; }
+    const textoOriginal = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Leyendo...';
+    try {
+      let filas;
+      if (/\.xlsx$/i.test(file.name)) {
+        if (typeof ExcelJS === 'undefined') throw new Error('No se pudo cargar el lector de Excel -- revisa tu conexión.');
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(await file.arrayBuffer());
+        const hoja = workbook.worksheets[0];
+        filas = [];
+        hoja.eachRow({ includeEmpty: false }, (row) => {
+          filas.push(row.values.slice(1).map((v) => {
+            if (v === null || v === undefined) return '';
+            if (v instanceof Date) return v.toISOString().slice(0, 10);
+            if (typeof v === 'object') return v.result ?? v.text ?? '';
+            return v;
+          }));
+        });
+      } else {
+        const texto = await leerCsvComoTextoPuc(file);
+        filas = filasCsvSimple(texto);
+      }
+      const res = await fetch(`/api/clients/${encodeURIComponent(cliente.id)}/historial-contable`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filas, nombreArchivo: file.name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo leer el archivo.');
+      cliente.historial_contable_resumen = JSON.stringify(data);
+      pintarResumenHistorial(cliente, data);
+      input.value = '';
+      Aviso.mostrar(`Listo: aprendí de ${data.proveedores} proveedores de este cliente.`);
+    } catch (err) {
+      Aviso.mostrar('No se pudo importar: ' + err.message, { tipo: 'error' });
+    } finally {
+      btn.disabled = false; btn.textContent = textoOriginal;
+    }
+  };
+
+  document.getElementById('btnBorrarHistorial').onclick = async () => {
+    const ok = await Aviso.confirmarEliminar('¿Borrar lo aprendido de la contabilidad anterior de este cliente? Las facturas ya causadas no cambian; las marcas de "no se le retiene" se quedan en el perfil de cada proveedor (se quitan en Configuración).', { titulo: 'Borrar contabilidad importada', textoConfirmar: 'Borrar' });
+    if (!ok) return;
+    const res = await fetch(`/api/clients/${encodeURIComponent(cliente.id)}/historial-contable`, { method: 'DELETE' });
+    if (!res.ok) { Aviso.mostrar('No se pudo borrar.', { tipo: 'error' }); return; }
+    cliente.historial_contable_resumen = '';
+    pintarResumenHistorial(cliente, null);
+    Aviso.mostrar('Listo: se borró lo importado.');
+  };
+}
+
+// CSV con comillas, coma o punto y coma (lo que exportan los programas contables).
+function filasCsvSimple(texto){
+  const filas = []; let fila = []; let campo = ''; let comillas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (comillas) {
+      if (c === '"') { if (texto[i + 1] === '"') { campo += '"'; i++; } else comillas = false; }
+      else campo += c;
+    } else if (c === '"') comillas = true;
+    else if (c === ',' || c === ';') { fila.push(campo); campo = ''; }
+    else if (c === '\n') { fila.push(campo); filas.push(fila); fila = []; campo = ''; }
+    else if (c !== '\r') campo += c;
+  }
+  if (campo || fila.length) { fila.push(campo); filas.push(fila); }
+  return filas;
+}
 
 async function requireAuthAndInit(){
   try {

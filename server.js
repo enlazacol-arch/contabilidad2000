@@ -21,6 +21,8 @@ const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
 // PUC propio de cada cliente (niveles, cuentas obsoletas, cuenta por tarifa)
 const pucCliente = require('./public/puc-cliente');
+// Contabilidad anterior del cliente (Auxiliar General / Listado de movimientos)
+const historialContable = require('./public/historial-contable');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -459,6 +461,33 @@ async function ensureSchema() {
   // Ver calcularRetencionCategoriaLinea() en retenciones.js, que es
   // donde esta marca deja de sugerir la tarifa fija.
   await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS aplica_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
+  // "A este proveedor no se le retiene": aprendido de la contabilidad
+  // anterior del cliente (documentos sobre la base sin retención) o
+  // marcado a mano. Como autorretenedor, deja de proponer retención.
+  await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS no_retener BOOLEAN NOT NULL DEFAULT false;`);
+  // Lo aprendido de la contabilidad anterior de cada cliente (ver
+  // public/historial-contable.js): por proveedor, cada cuenta de gasto que
+  // se le usó, con los detalles de los movimientos. Alimenta el historial
+  // de cuentas (/api/subcuentas-historial), el copiloto de cuentas y la
+  // corrección del NIT por nombre.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS historial_contable_cliente (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      cliente_id UUID NOT NULL,
+      nit TEXT NOT NULL,
+      nombre_tercero TEXT NOT NULL DEFAULT '',
+      nombre_normalizado TEXT NOT NULL DEFAULT '',
+      cuenta TEXT NOT NULL,
+      detalles TEXT NOT NULL DEFAULT '',
+      veces INTEGER NOT NULL DEFAULT 1,
+      valor NUMERIC NOT NULL DEFAULT 0,
+      importado_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_historial_contable_cliente ON historial_contable_cliente (contador_id, cliente_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_historial_contable_nombre ON historial_contable_cliente (contador_id, nombre_normalizado);`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS historial_contable_resumen TEXT DEFAULT '';`);
 
   // PUC personalizado por cliente -- algunos contadores llevan la
   // contabilidad de un cliente puntual en OTRO sistema (ej. Contaia) que
@@ -1860,6 +1889,103 @@ function filaPucParaNavegador(r) {
 }
 const PUC_CAMPOS_SELECT = `id, categoria_concepto, codigo, concepto, recibe_movimiento, activo, porcentaje, tipo_cuenta, origen, editado`;
 
+// ---------- Contabilidad anterior del cliente ----------
+// La contadora sube el Auxiliar General (o el Listado de Movimiento por
+// Comprobante) que exporta su programa contable; el navegador lo lee
+// (Excel/CSV) y manda las filas. Enlaza aprende de ahí (ver
+// public/historial-contable.js) y lo deja listo desde la primera factura:
+//   - cuentas por proveedor y detalle -> historial_contable_cliente;
+//   - proveedores con documentos sobre la base y nunca retención ->
+//     terceros_fiscales.no_retener (sin tocar sus otras marcas);
+//   - tarifa de retención habitual (por la cuenta 2365 usada) ->
+//     tarifa_proveedor_aprendida, sin pisar una ya aprendida;
+//   - si el IVA al gasto se controla en cuentas de orden -> se informa
+//     para activarlo en la ficha del cliente.
+// Una importación nueva reemplaza la anterior de ese cliente.
+app.post('/api/clients/:id/historial-contable', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const filas = Array.isArray(req.body.filas) ? req.body.filas : [];
+    if (filas.length < 2) return res.status(400).json({ error: 'El archivo no trae movimientos.' });
+    const { movimientos, formato, error } = historialContable.movimientosDesdeTabla(filas);
+    if (error) return res.status(400).json({ error });
+    if (movimientos.length === 0) return res.status(400).json({ error: 'No se encontraron movimientos en el archivo.' });
+
+    const { rows: puc } = await pool.query(
+      'SELECT codigo, porcentaje FROM puc_personalizado_cliente WHERE contador_id = $1 AND cliente_id = $2',
+      [req.firmaId, req.params.id]
+    );
+    const k = historialContable.conocimientoDesdeMovimientos(movimientos, puc.map((c) => ({ codigo: c.codigo, porcentaje: c.porcentaje === null ? null : Number(c.porcentaje) })));
+
+    await pool.query('DELETE FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2', [req.firmaId, req.params.id]);
+    const cuentas = k.cuentas;
+    for (let i = 0; i < cuentas.length; i += 400) {
+      const b = cuentas.slice(i, i + 400);
+      await pool.query(
+        `INSERT INTO historial_contable_cliente (id, contador_id, cliente_id, nit, nombre_tercero, nombre_normalizado, cuenta, detalles, veces, valor)
+         SELECT u.id, $2, $3, u.nit, u.nombre, u.normalizado, u.cuenta, u.detalles, u.veces, u.valor
+         FROM unnest($1::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::int[], $10::numeric[])
+           AS u(id, nit, nombre, normalizado, cuenta, detalles, veces, valor)`,
+        [b.map(() => crypto.randomUUID()), req.firmaId, req.params.id,
+          b.map((c) => c.nit), b.map((c) => k.terceros[c.nit] || ''), b.map((c) => historialContable.normalizarNombreTercero(k.terceros[c.nit] || '')),
+          b.map((c) => c.cuenta), b.map((c) => c.detalles.join(' | ').slice(0, 2000)), b.map((c) => c.veces), b.map((c) => Math.round(c.valor))]
+      );
+    }
+
+    const noRetiene = k.retencion.filter((r) => r.noRetiene);
+    for (const r of noRetiene) {
+      await pool.query(
+        `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, no_retener, notas)
+         VALUES ($1, $2, $3, $4, true, 'Sin retención en la contabilidad anterior del cliente.')
+         ON CONFLICT (contador_id, nit) DO UPDATE SET no_retener = true,
+           nombre = COALESCE(NULLIF(terceros_fiscales.nombre, ''), EXCLUDED.nombre), updated_at = now()`,
+        [crypto.randomUUID(), req.firmaId, r.nit, k.terceros[r.nit] || '']
+      );
+    }
+    const conTarifa = k.retencion.filter((r) => r.conRetencion > 0 && r.tarifa && r.categoria);
+    for (const r of conTarifa) {
+      await pool.query(
+        `INSERT INTO tarifa_proveedor_aprendida (id, contador_id, nit_proveedor, categoria, tarifa, veces_confirmado)
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (contador_id, nit_proveedor, categoria) DO NOTHING`,
+        [crypto.randomUUID(), req.firmaId, r.nit, r.categoria, r.tarifa, r.conRetencion]
+      );
+    }
+
+    const resumen = {
+      importado_at: new Date().toISOString(),
+      archivo: String(req.body.nombreArchivo || '').slice(0, 200),
+      formato,
+      movimientos: movimientos.length,
+      proveedores: new Set(cuentas.map((c) => c.nit)).size,
+      cuentas: cuentas.length,
+      no_retener: noRetiene.map((r) => k.terceros[r.nit] || r.nit),
+      con_retencion: conTarifa.map((r) => ({ nombre: k.terceros[r.nit] || r.nit, tarifa: r.tarifa, cuenta: r.cuentaRetencion })),
+      iva_cuentas_orden: k.ivaCuentasOrden,
+    };
+    await pool.query('UPDATE clients SET historial_contable_resumen = $1 WHERE id = $2 AND contador_id = $3', [JSON.stringify(resumen), req.params.id, req.firmaId]);
+    res.json(resumen);
+  } catch (err) {
+    console.error('Error importando la contabilidad anterior del cliente:', err);
+    res.status(500).json({ error: 'No se pudo importar el archivo.' });
+  }
+});
+
+app.delete('/api/clients/:id/historial-contable', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    await pool.query('DELETE FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2', [req.firmaId, req.params.id]);
+    await pool.query(`UPDATE clients SET historial_contable_resumen = '' WHERE id = $1 AND contador_id = $2`, [req.params.id, req.firmaId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error borrando la contabilidad anterior del cliente:', err);
+    res.status(500).json({ error: 'No se pudo borrar.' });
+  }
+});
+
 // Lista el PUC propio del cliente, ordenado por código: las cuentas
 // importadas de su programa contable y las que el contador agregó a mano.
 app.get('/api/clients/:id/puc', requireAuth, async (req, res) => {
@@ -2321,7 +2447,11 @@ app.get('/api/subcuentas-historial', requireAuth, async (req, res) => {
         WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
           AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
           AND i.saved_at > now() - interval '18 months'
-        GROUP BY i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto`,
+        GROUP BY i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto
+       UNION ALL
+       -- Contabilidad anterior importada: sirve para cualquier categoría ('*').
+       SELECT cliente_id, nit, '*', cuenta, veces, importado_at, detalles
+         FROM historial_contable_cliente WHERE contador_id = $1`,
       [req.firmaId]
     );
     res.json(rows
@@ -3863,6 +3993,33 @@ function sanitizarConfianzaCampos(crudo) {
   return limpio;
 }
 
+// NIT ya conocidos para un nombre de proveedor: los de facturas guardadas
+// (mismo nombre) y los de la contabilidad anterior importada de los
+// clientes (nombre normalizado: sin puntuación ni sigla societaria, así
+// "GAMOEZ S.A.S." y "GAMOEZ SAS" coinciden). Devuelve [{nit, dv}].
+async function nitsConocidosPorNombre(userId, nombre) {
+  const nombreSinTildes = String(nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normalizado = historialContable.normalizarNombreTercero(nombre);
+  const [deFacturas, deContabilidad] = await Promise.all([
+    pool.query(
+      `SELECT nit_cc AS nit, MAX(dv) AS dv, COUNT(*) AS n FROM invoices
+        WHERE contador_id = $1 AND nit_cc <> ''
+          AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
+        GROUP BY nit_cc ORDER BY n DESC LIMIT 3`,
+      [userId, nombreSinTildes.toUpperCase()]
+    ),
+    normalizado.length >= 4
+      ? pool.query(`SELECT DISTINCT nit FROM historial_contable_cliente WHERE contador_id = $1 AND nombre_normalizado = $2 LIMIT 3`, [userId, normalizado])
+      : Promise.resolve({ rows: [] }),
+  ]);
+  const vistos = new Map();
+  [...deFacturas.rows, ...deContabilidad.rows].forEach((r) => {
+    const nit = normalizarNit(r.nit);
+    if (nit && !vistos.has(nit)) vistos.set(nit, { nit, dv: r.dv || '' });
+  });
+  return [...vistos.values()];
+}
+
 async function posprocesarDocumentoExtraido(userId, parsed) {
   if (parsed.documento_valido === false || (parsed.tipo_documento && !TIPOS_DOCUMENTO_VALIDOS.includes(parsed.tipo_documento))) {
     const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
@@ -3932,16 +4089,9 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   // usa ese y se avisa, en vez de dejarlo vacío o inventado.
   if (!parsed.nit_cc && parsed.nombre_razon_social) {
     try {
-      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const { rows } = await pool.query(
-        `SELECT nit_cc, MAX(dv) AS dv, COUNT(*) AS n FROM invoices
-          WHERE contador_id = $1 AND nit_cc <> ''
-            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
-          GROUP BY nit_cc ORDER BY n DESC LIMIT 2`,
-        [userId, nombreSinTildes]
-      );
+      const rows = await nitsConocidosPorNombre(userId, parsed.nombre_razon_social);
       if (rows.length === 1) {
-        parsed.nit_cc = normalizarNit(rows[0].nit_cc);
+        parsed.nit_cc = rows[0].nit;
         if (!parsed.dv && rows[0].dv) parsed.dv = rows[0].dv;
         parsed.nit_desde_historial = true;
         avisosNit.push(`El NIT no se ve en el documento: se tomó ${parsed.nit_cc}, el que ya tienes registrado para ${parsed.nombre_razon_social}. Confírmalo.`);
@@ -3958,15 +4108,7 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   }
   if (parsed.nit_cc && parsed.nombre_razon_social) {
     try {
-      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const { rows } = await pool.query(
-        `SELECT nit_cc, COUNT(*) AS n FROM invoices
-          WHERE contador_id = $1 AND nit_cc <> ''
-            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
-          GROUP BY nit_cc ORDER BY n DESC LIMIT 3`,
-        [userId, nombreSinTildes]
-      );
-      const conocidos = [...new Set(rows.map((r) => normalizarNit(r.nit_cc)).filter(Boolean))];
+      const conocidos = (await nitsConocidosPorNombre(userId, parsed.nombre_razon_social)).map((r) => r.nit);
       if (conocidos.length === 1 && !conocidos.includes(parsed.nit_cc)) {
         // Un solo NIT registrado (y aprobado antes) para este proveedor: se
         // usa ese. La IA a veces "completa de memoria" el NIT de empresas
@@ -4702,7 +4844,7 @@ function normalizarNit(nit) {
 app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.firmaId]
     );
@@ -4724,27 +4866,39 @@ app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'co
     const regimenSimple = !!req.body.regimen_simple;
     const agenteRetencionIva = !!req.body.agente_retencion_iva;
     const declaranteRenta = !!req.body.declarante_renta;
-    const aplicaArticulo383 = !!req.body.aplica_articulo_383;
+    // Art. 383 y "No se le retiene": si la pantalla no los manda (el panel
+    // de perfil de Escanear no tenía el 383, y lo borraba al guardar), se
+    // conserva lo que ya tenía -- no se pierde lo marcado ni lo aprendido.
+    let aplicaArticulo383 = req.body.aplica_articulo_383;
+    let noRetener = req.body.no_retener;
+    if (aplicaArticulo383 === undefined || noRetener === undefined) {
+      const previo = await pool.query('SELECT aplica_articulo_383, no_retener FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
+      const fila = previo.rows[0] || {};
+      if (aplicaArticulo383 === undefined) aplicaArticulo383 = fila.aplica_articulo_383;
+      if (noRetener === undefined) noRetener = fila.no_retener;
+    }
+    aplicaArticulo383 = !!aplicaArticulo383;
+    noRetener = !!noRetener;
 
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
-    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !nombre && !notas) {
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !noRetener && !nombre && !notas) {
       await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
       return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, aplica_articulo_383: false, notas: '', borrado: true });
     }
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, no_retener)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (contador_id, nit) DO UPDATE SET
          nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
          autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
          agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
-         aplica_articulo_383 = EXCLUDED.aplica_articulo_383,
+         aplica_articulo_383 = EXCLUDED.aplica_articulo_383, no_retener = EXCLUDED.no_retener,
          notas = EXCLUDED.notas, updated_at = now()
-       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
-      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas]
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at`,
+      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas, noRetener]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -4783,7 +4937,7 @@ app.post('/api/proveedores/motivo-sin-retencion', requireAuth, requireRole('admi
          VALUES ($1, $2, $3, $4, true)
          ON CONFLICT (contador_id, nit) DO UPDATE SET ${columna} = true,
            nombre = COALESCE(NULLIF(EXCLUDED.nombre, ''), terceros_fiscales.nombre), updated_at = now()
-         RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
+         RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at`,
         [crypto.randomUUID(), req.firmaId, nit, nombre]
       );
       return res.json({ ok: true, perfil: rows[0] });
