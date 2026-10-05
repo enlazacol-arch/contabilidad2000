@@ -1681,6 +1681,33 @@ const CAMPOS_FACTURA_EXISTENTE = `
   valor_con_iva, tipo_movimiento, cliente_id, saved_at
 `;
 
+// ¿Esta factura ya se causó? Busca las facturas guardadas que podrían
+// coincidir (mismo archivo, NIT, número o valor) y decide con
+// evaluarDuplicado() (duplicados.js, con las reglas y su porqué).
+// `clienteId` habilita la regla "el mismo gasto con otro soporte".
+const { evaluarDuplicado } = require('./duplicados');
+async function buscarPosibleDuplicado(contadorId, f, clienteId) {
+  const nit = normalizarNit(f.nit_cc);
+  const numero = String(f.numeros_fe || '').replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toUpperCase();
+  const valor = Math.round(Number(String(f.valor_con_iva == null ? '' : f.valor_con_iva).replace(/[^0-9.]/g, ''))) || 0;
+  if (!f.file_hash && !nit && !numero && !valor) return null;
+  const { rows } = await pool.query(
+    `SELECT ${CAMPOS_FACTURA_EXISTENTE}, nit_cc, concepto, file_hash FROM invoices
+      WHERE contador_id = $1 AND (
+        ($2 <> '' AND file_hash = $2)
+        OR ($3 <> '' AND REGEXP_REPLACE(nit_cc, '[^0-9]', '', 'g') = $3)
+        OR ($4 <> '' AND LTRIM(UPPER(REGEXP_REPLACE(numeros_fe, '[^0-9A-Za-z]', '', 'g')), '0') = $4)
+        OR ($5::numeric > 0 AND REGEXP_REPLACE(valor_con_iva, '[^0-9]', '', 'g') = $6)
+      )
+      ORDER BY saved_at DESC LIMIT 300`,
+    [contadorId, f.file_hash || '', nit, numero, valor, String(valor)]
+  );
+  const r = evaluarDuplicado(f, rows, { clienteId });
+  if (!r) return null;
+  const { nit_cc, concepto, file_hash, ...existente } = r.existente;
+  return { motivo: r.motivo, mensaje: r.mensaje, existente };
+}
+
 async function buscarFacturaPorHash(contadorId, fileHash) {
   if (!fileHash) return null;
   const { rows } = await pool.query(
@@ -2725,49 +2752,19 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       }
     }
 
-    // Red de seguridad contra duplicados -- /api/extract ya avisa ANTES
-    // de leer con IA si el archivo coincide con una factura guardada,
-    // pero esto cubre el caso de que se llegue aquí sin pasar por ahí
-    // (ej. una pestaña vieja, o dos subidas casi al mismo tiempo). Si el
-    // contador ya confirmó que quiere guardarla de todas formas, manda
-    // forzar_duplicado y se salta este chequeo.
-    if (req.body.file_hash && !req.body.forzar_duplicado) {
-      const existente = await buscarFacturaPorHash(req.firmaId, req.body.file_hash);
-      if (existente) {
+    // La misma factura no se causa dos veces (ver duplicados.js): mismo
+    // archivo, mismo NIT y número, mismo número y valor con otro NIT,
+    // documento sin número con mismo NIT/valor/fecha, o el mismo gasto
+    // con otro soporte. Si el contador ya revisó y confirma que no es la
+    // misma, manda forzar_duplicado y se guarda.
+    if (!req.body.forzar_duplicado) {
+      const dup = await buscarPosibleDuplicado(req.firmaId, { ...req.body, items: Array.isArray(req.body.items) ? req.body.items : [] }, req.body.cliente_id || null);
+      if (dup) {
         return res.status(409).json({
-          error: 'Este documento ya se había guardado antes -- no se guardó de nuevo para evitar un duplicado.',
+          error: `${dup.mensaje} No se guardó para no causarla dos veces -- si de verdad es otra, guárdala de todas formas.`,
           duplicado: true,
-          factura_existente: existente,
-        });
-      }
-    }
-
-    // Misma regla que ya usa generarAsientoEgreso() (tolerancia $1) --
-    // se calcula UNA vez aquí, aparte de esa función, para que quede
-    // guardada de forma permanente en la factura misma (columna
-    // valores_descuadrados) y no dependa de que se llegue a generar un
-    // asiento para que el problema quede registrado en algún lado. Solo
-    // se evalúa si ambos valores base están presentes -- una factura sin
-    // valor_sin_iva o sin valor_con_iva ya se rechaza antes por otro
-    // motivo (campo obligatorio vacío), no hace falta duplicarlo aquí.
-    // Misma factura escaneada otra vez (otra foto, otro archivo): mismo
-    // proveedor y mismo número. El control por huella del archivo de
-    // arriba no la detecta porque el archivo es distinto.
-    const numeroLimpio = String(req.body.numeros_fe || '').replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toUpperCase();
-    if (req.body.nit_cc && numeroLimpio && !req.body.forzar_duplicado) {
-      const { rows: mismoNumero } = await pool.query(
-        `SELECT ${CAMPOS_FACTURA_EXISTENTE} FROM invoices
-          WHERE contador_id = $1
-            AND REGEXP_REPLACE(nit_cc, '[^0-9]', '', 'g') = $2
-            AND LTRIM(UPPER(REGEXP_REPLACE(numeros_fe, '[^0-9A-Za-z]', '', 'g')), '0') = $3
-          LIMIT 1`,
-        [req.firmaId, normalizarNit(req.body.nit_cc), numeroLimpio]
-      );
-      if (mismoNumero.length > 0) {
-        return res.status(409).json({
-          error: `Ya existe una factura de este proveedor con el número ${req.body.letras_fe || ''}${req.body.numeros_fe} -- no se guardó de nuevo para evitar un duplicado.`,
-          duplicado: true,
-          factura_existente: mismoNumero[0],
+          motivo_duplicado: dup.motivo,
+          factura_existente: dup.existente,
         });
       }
     }
@@ -4236,6 +4233,15 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     console.error('No se pudo revisar correcciones aprendidas:', err.message);
   }
 
+  // ¿Ya está causada? Se avisa desde que se lee (Escanear y Carga masiva
+  // lo muestran como excepción "Posible duplicado"), no solo al guardar.
+  // Sin el archivo: ese caso ya lo frena la lectura misma.
+  try {
+    const dup = await buscarPosibleDuplicado(userId, { ...parsed, file_hash: '' }, null);
+    if (dup) parsed.posible_duplicado = dup;
+  } catch (err) {
+    console.error('No se pudo revisar si la factura ya estaba causada:', err.message);
+  }
   return { ok: true, data: parsed };
 }
 

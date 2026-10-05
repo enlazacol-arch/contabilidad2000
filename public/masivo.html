@@ -2138,6 +2138,12 @@ function renderSummary(){
           <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml(item.data.aviso_movimiento)}</div>
         </div>
       ` : ''}
+      ${item.duplicadoAlGuardar || tieneExcepcion(item.data, 'posible_duplicado') ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--err-bg);border-radius:var(--r-sm);">
+          <div style="color:var(--err);font-size:var(--t-13);">⚠ <b>Posible duplicado:</b> ${escapeHtml(item.duplicadoAlGuardar ? item.duplicadoAlGuardar.mensaje : ((listaExcepciones(item.data).find((x) => x.tipo === 'posible_duplicado') || {}).detalle || ''))}</div>
+          ${item.duplicadoAlGuardar ? `<div class="fc-acciones"><button type="button" class="btn ghost btn--sm" data-role="guardar-forzando-duplicado" data-idx="${idx}">No es la misma: guardar de todas formas</button></div>` : ''}
+        </div>
+      ` : ''}
       ${tieneExcepcion(item.data, 'nit_por_verificar') ? `
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
           <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml((listaExcepciones(item.data).find((x) => x.tipo === 'nit_por_verificar') || {}).detalle || '')}</div>
@@ -2291,9 +2297,10 @@ function construirPayloadFactura(item){
 // masivo (en un loop) como por el botón individual de cada tarjeta.
 // Deja el resultado marcado directamente en el item (estado/errorGuardado)
 // para que renderSummary() solo tenga que pintar lo que ya quedó decidido.
-async function guardarUnaFactura(item){
+async function guardarUnaFactura(item, forzarDuplicado){
   try {
     const payload = construirPayloadFactura(item);
+    if (forzarDuplicado) payload.forzar_duplicado = true;
     // El documento original (foto/PDF) de este ítem solo existe en el
     // lote mientras no se guarda la factura (mismo endpoint que ya usa
     // el botón "Ver documento" de la tarjeta) -- se trae acá y se
@@ -2336,8 +2343,16 @@ async function guardarUnaFactura(item){
       // existía (ej. dos archivos idénticos en el mismo lote) -- se
       // reclasifica como duplicada en vez de fallar en silencio.
       const errData = await res.json().catch(() => null);
-      item.estado = 'duplicado';
-      item.data = { ...item.data, factura_existente: errData?.factura_existente || {} };
+      // Mismo archivo: no hay nada que revisar, ya está guardada. Las
+      // demás reglas (mismo número, sin número, mismo gasto...) son una
+      // sospecha: se explica y el contador decide si guardarla igual.
+      if (!errData || errData.motivo_duplicado === 'archivo' || !errData.motivo_duplicado) {
+        item.estado = 'duplicado';
+        item.data = { ...item.data, factura_existente: errData?.factura_existente || {} };
+      } else {
+        item.duplicadoAlGuardar = { mensaje: errData.error, existente: errData.factura_existente };
+        item.errorGuardado = '';
+      }
       return { ok: false, duplicado: true };
     }
     const errData = await res.json().catch(() => null);
@@ -2510,6 +2525,17 @@ summaryBody.addEventListener('click', async (e) => {
     const idx = Number(btnGuardarSinLetras.dataset.idx);
     if (isNaN(idx)) return;
     guardarFacturaIndividual(idx, btnGuardarSinLetras, false, true);
+    return;
+  }
+
+  const btnForzarDup = e.target.closest('[data-role="guardar-forzando-duplicado"]');
+  if (btnForzarDup) {
+    const item = lote[Number(btnForzarDup.dataset.idx)];
+    if (!item) return;
+    btnForzarDup.disabled = true;
+    item.duplicadoAlGuardar = null;
+    await guardarUnaFactura(item, true);
+    renderSummary();
     return;
   }
 
