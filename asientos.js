@@ -135,6 +135,13 @@ function codigoCuentaGasto(subcuentaGasto) {
 //     gasto va a su cuenta "IVA ..." cuando la tiene.
 //   ivaMayorValorGasto: el cliente NO es responsable de IVA -- todo el
 //     IVA es mayor valor del gasto, nada va a la 2408.
+//   ivaEnCuentaIva: el IVA llevado al gasto va a la cuenta "IVA ..." del
+//     plan del cliente que acompaña ese gasto (ej. 513508 IVA VIGILANCIA).
+//     Por defecto (false) se suma a la MISMA cuenta del gasto, que es como
+//     lo registra la contadora de Bosques en su contabilidad real.
+//   ivaCuentasOrden: además, el IVA llevado al gasto se controla en
+//     cuentas de orden -- débito a la 8395 "IVA" y crédito a la 8695 del
+//     plan del cliente (ej. 839519 / 869519), por el mismo valor.
 //
 // Devuelve { lineas, debe, haber } si se pudo generar, o
 // { error: 'motivo' } si falta algo -- nunca lanza, y nunca devuelve un
@@ -238,14 +245,27 @@ function generarAsientoEgreso(invoice, items, opciones = {}) {
   for (const [codigo, { monto, ivaGasto }] of gastosPorCuenta) {
     sumarDebito(codigo, monto);
     if (ivaGasto > 0) {
-      // La cuenta "IVA ..." del plan del cliente que acompaña este gasto
-      // (ej. 513508 IVA VIGILANCIA); si no tiene, a la misma cuenta.
-      const cuentaIva = cuentaIvaGastoCliente(puc, codigo);
+      // A la misma cuenta del gasto; o, si el cliente así lo lleva, a su
+      // cuenta "IVA ..." que acompaña este gasto (ej. 513508 IVA
+      // VIGILANCIA) cuando la tiene.
+      const cuentaIva = opciones.ivaEnCuentaIva ? cuentaIvaGastoCliente(puc, codigo) : null;
       sumarDebito(cuentaIva ? String(cuentaIva.codigo) : codigo, ivaGasto);
     }
   }
   for (const [codigo, monto] of debitos) {
     lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: nombreDe(codigo), debito: round2(monto), credito: 0, cuenta_cliente: delCliente(codigo) });
+  }
+
+  // Control del IVA llevado al gasto en cuentas de orden (8395 deudora /
+  // 8695 por contra, las del plan del cliente cuyo nombre dice IVA).
+  if (opciones.ivaCuentasOrden && ivaMayorValor > 0) {
+    const deOrden = (grupo) => puc.filter((c) => cuentaUsable(c) && String(c.codigo).startsWith(grupo) && /\bIVA\b/i.test(String(c.concepto || '')))[0];
+    const deudora = deOrden('8395');
+    const porContra = deOrden('8695');
+    if (deudora && porContra) {
+      lineas.push({ orden: orden++, cuenta_codigo: String(deudora.codigo), cuenta_nombre: String(deudora.concepto).trim(), debito: round2(ivaMayorValor), credito: 0, cuenta_cliente: true });
+      lineas.push({ orden: orden++, cuenta_codigo: String(porContra.codigo), cuenta_nombre: String(porContra.concepto).trim(), debito: 0, credito: round2(ivaMayorValor), cuenta_cliente: true });
+    }
   }
 
   const ivaDescontable = round2(valorIva - ivaMayorValor);

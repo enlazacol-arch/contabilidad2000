@@ -506,6 +506,11 @@ async function ensureSchema() {
   // actividad gravada): el IVA de sus compras no es descontable, es más
   // valor del gasto -- el asiento lo lleva al gasto y no a la 2408.
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_mayor_valor_gasto BOOLEAN DEFAULT false;`);
+  // Cómo se lleva ese IVA al gasto (ver generarAsientoEgreso): en la cuenta
+  // "IVA ..." del plan del cliente (true) o en la misma cuenta del gasto
+  // (false, por defecto); y si se controla en cuentas de orden 8395/8695.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_gasto_en_cuenta_iva BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_cuentas_orden BOOLEAN DEFAULT false;`);
 
   // CREATE TABLE IF NOT EXISTS no agrega columnas nuevas a una tabla que
   // ya existía de antes -- por eso `declarante_renta` (agregado después
@@ -1542,6 +1547,8 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
     // cuentas "IVA ..." al gasto). Sin plan propio, el PUC estándar.
     let pucDelCliente = [];
     let ivaMayorValorGasto = false;
+    let ivaEnCuentaIva = false;
+    let ivaCuentasOrden = false;
     if (invoiceRow.cliente_id) {
       const [pucRes, cliRes] = await Promise.all([
         pool.query(
@@ -1549,12 +1556,15 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
            WHERE contador_id = $1 AND cliente_id = $2`,
           [contadorId, invoiceRow.cliente_id]
         ),
-        pool.query('SELECT iva_mayor_valor_gasto FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
+        pool.query('SELECT iva_mayor_valor_gasto, iva_gasto_en_cuenta_iva, iva_cuentas_orden FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
       ]);
       pucDelCliente = pucRes.rows.map((r) => ({ ...r, porcentaje: r.porcentaje === null ? null : Number(r.porcentaje) }));
-      ivaMayorValorGasto = !!(cliRes.rows[0] && cliRes.rows[0].iva_mayor_valor_gasto);
+      const cli = cliRes.rows[0] || {};
+      ivaMayorValorGasto = !!cli.iva_mayor_valor_gasto;
+      ivaEnCuentaIva = !!cli.iva_gasto_en_cuenta_iva;
+      ivaCuentasOrden = !!cli.iva_cuentas_orden;
     }
-    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto });
+    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto, ivaEnCuentaIva, ivaCuentasOrden });
     if (resultado.error) {
       // No es un error del guardado de la factura -- solo significa que
       // todavía no hay suficiente información (o que es una factura de
@@ -1768,7 +1778,7 @@ const CLIENT_EDITABLE_FIELDS = [
   // contador los marca a mano, así que sí se aceptan directo del cliente.
   'agente_retenedor_ica', 'agente_retenedor_iva',
   // No responsable de IVA: el IVA de sus compras va al gasto (ver asientos.js)
-  'iva_mayor_valor_gasto',
+  'iva_mayor_valor_gasto', 'iva_gasto_en_cuenta_iva', 'iva_cuentas_orden',
 ];
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
@@ -1791,8 +1801,8 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     if (updates.agente_retenedor_iva !== undefined) {
       updates.agente_retenedor_iva = !!updates.agente_retenedor_iva;
     }
-    if (updates.iva_mayor_valor_gasto !== undefined) {
-      updates.iva_mayor_valor_gasto = !!updates.iva_mayor_valor_gasto;
+    for (const campo of ['iva_mayor_valor_gasto', 'iva_gasto_en_cuenta_iva', 'iva_cuentas_orden']) {
+      if (updates[campo] !== undefined) updates[campo] = !!updates[campo];
     }
 
     const keys = Object.keys(updates);

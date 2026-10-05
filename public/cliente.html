@@ -119,6 +119,9 @@
   .btn-ver-factura{ white-space:nowrap; }
   .puc-opcion-iva{ display:flex; gap:10px; align-items:flex-start; font-size:var(--t-13); color:var(--ink-soft); max-width:80ch; margin:0 0 16px; cursor:pointer; }
   .puc-opcion-iva input{ margin-top:3px; }
+  .puc-iva-modo{ margin:-8px 0 16px 26px; }
+  .puc-iva-modo .puc-opcion-iva{ margin-bottom:6px; }
+  .puc-iva-modo[hidden]{ display:none; }
   .puc-resumen{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; font-size:var(--t-13); color:var(--ink-soft); margin:0 0 12px; }
   .puc-resumen strong{ font-family:var(--font-num); color:var(--ink); }
   .puc-lote{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:var(--t-13); padding:8px 10px; margin-bottom:10px;
@@ -297,8 +300,13 @@
 
       <label class="puc-opcion-iva">
         <input type="checkbox" id="pucIvaMayorValor">
-        <span><strong>No responsable de IVA:</strong> el IVA de sus compras es mayor valor del gasto (no va a la 2408). Si el plan tiene cuentas «IVA …» junto a cada gasto, se usan esas.</span>
+        <span><strong>No responsable de IVA:</strong> el IVA de sus compras es mayor valor del gasto (no va a la 2408).</span>
       </label>
+      <div class="puc-iva-modo" id="pucIvaModo" hidden>
+        <label class="puc-opcion-iva"><input type="radio" name="pucIvaDonde" value="misma"> <span>Sumar el IVA a la <strong>misma cuenta del gasto</strong> (ej. vigilancia con IVA, todo en 513507).</span></label>
+        <label class="puc-opcion-iva"><input type="radio" name="pucIvaDonde" value="cuenta_iva"> <span>Llevarlo a la cuenta <strong>«IVA …»</strong> del plan que acompaña el gasto (ej. 513508 IVA VIGILANCIA), cuando existe.</span></label>
+        <label class="puc-opcion-iva"><input type="checkbox" id="pucIvaCuentasOrden"> <span>Además, <strong>controlarlo en cuentas de orden</strong>: débito a la 8395 y crédito a la 8695 del plan cuyo nombre dice IVA (ej. 839519 / 869519).</span></label>
+      </div>
 
       <div class="puc-resumen" id="pucResumen" style="display:none;"></div>
 
@@ -610,22 +618,40 @@ async function cargarPuc(cliente){
   clienteActualId = cliente.id;
   poblarSelectorCategoriasPuc(document.getElementById('pucCategoria'));
   poblarFiltroCategoriaPuc(document.getElementById('pucFiltroCategoria'));
+  // IVA de las compras: descontable (2408) o mayor valor del gasto, y en
+  // ese caso cómo se lleva (misma cuenta o cuenta "IVA ...", cuentas de
+  // orden) -- ver generarAsientoEgreso en asientos.js.
   const opcionIva = document.getElementById('pucIvaMayorValor');
-  opcionIva.checked = !!cliente.iva_mayor_valor_gasto;
-  opcionIva.onchange = async () => {
-    const valor = opcionIva.checked;
+  const modoIva = document.getElementById('pucIvaModo');
+  const radiosDonde = [...document.querySelectorAll('input[name="pucIvaDonde"]')];
+  const cuentasOrden = document.getElementById('pucIvaCuentasOrden');
+  const pintarIva = () => {
+    opcionIva.checked = !!cliente.iva_mayor_valor_gasto;
+    modoIva.hidden = !opcionIva.checked;
+    radiosDonde.forEach((r) => { r.checked = r.value === (cliente.iva_gasto_en_cuenta_iva ? 'cuenta_iva' : 'misma'); });
+    cuentasOrden.checked = !!cliente.iva_cuentas_orden;
+  };
+  const guardarIva = async (cambios, mensaje) => {
     try {
       const res = await fetch(`/api/clients/${encodeURIComponent(cliente.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ iva_mayor_valor_gasto: valor }),
+        body: JSON.stringify(cambios),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo guardar.');
-      Aviso.mostrar(valor ? 'Listo: el IVA de sus compras irá al gasto.' : 'Listo: el IVA de sus compras irá a IVA descontable (2408).');
+      Object.assign(cliente, cambios);
+      Aviso.mostrar(mensaje);
     } catch (err) {
-      opcionIva.checked = !valor;
       Aviso.mostrar('No se pudo guardar: ' + err.message, { tipo: 'error' });
     }
+    pintarIva();
   };
+  pintarIva();
+  opcionIva.onchange = () => guardarIva({ iva_mayor_valor_gasto: opcionIva.checked },
+    opcionIva.checked ? 'Listo: el IVA de sus compras irá al gasto.' : 'Listo: el IVA de sus compras irá a IVA descontable (2408).');
+  radiosDonde.forEach((r) => { r.onchange = () => guardarIva({ iva_gasto_en_cuenta_iva: r.value === 'cuenta_iva' },
+    r.value === 'cuenta_iva' ? 'Listo: el IVA irá a la cuenta «IVA …» del gasto.' : 'Listo: el IVA se sumará a la misma cuenta del gasto.'); });
+  cuentasOrden.onchange = () => guardarIva({ iva_cuentas_orden: cuentasOrden.checked },
+    cuentasOrden.checked ? 'Listo: el IVA al gasto se controlará en cuentas de orden.' : 'Listo: sin cuentas de orden para el IVA.');
   await recargarListaPuc();
 }
 
