@@ -11,10 +11,15 @@
 // cerró la pestaña -- mientras el servidor siga corriendo, el lote
 // sigue avanzando.
 //
-// Los lotes se procesan UNO A LA VEZ, en fila (si subes un lote nuevo
-// mientras otro sigue en curso, el nuevo espera su turno) -- más
-// simple que procesar varios en paralelo, y evita saturar la cuota de
-// la API de Gemini.
+// Cada lote es de UN usuario y UN cliente (o "sin cliente fijo"): en
+// Carga masiva, cada contador ve solo lo que él subió para ese cliente
+// (ver bandejaPendiente), aunque otra persona de la misma firma esté
+// cargando facturas de otro cliente al mismo tiempo.
+//
+// Se lee un archivo a la vez (para no saturar la cuota de Gemini), pero
+// por TURNOS entre los lotes en curso: un archivo de cada lote, en vez
+// de terminar un lote completo antes de empezar el siguiente -- así un
+// lote de 100 facturas no deja esperando a los demás.
 
 let procesandoAhora = false;
 
@@ -71,17 +76,22 @@ async function asegurarSchemaLotes() {
   // cuando ese archivo trajo varios documentos concatenados (ver
   // procesarUnItem más abajo). NULL para una fila que nunca se desglosó.
   await pool.query(`ALTER TABLE lote_items ADD COLUMN IF NOT EXISTS documento_indice INTEGER;`);
+  // Quién subió el lote (los de antes quedan en NULL: los ve toda la
+  // firma, como antes) y cuándo le tocó turno por última vez.
+  await pool.query(`ALTER TABLE lotes_procesamiento ADD COLUMN IF NOT EXISTS usuario_id UUID;`);
+  await pool.query(`ALTER TABLE lotes_procesamiento ADD COLUMN IF NOT EXISTS ultimo_turno TIMESTAMPTZ;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_lotes_usuario_cliente ON lotes_procesamiento (contador_id, usuario_id, cliente_id);`);
 }
 
 // Crea un lote nuevo con sus archivos (todavía "en_cola"), y dispara el
 // procesamiento en segundo plano -- no espera a que termine, responde
 // de inmediato con el id del lote para que el navegador pueda
 // consultarlo cuando quiera.
-async function crearLote(contadorId, clienteId, archivos) {
+async function crearLote(contadorId, clienteId, archivos, usuarioId) {
   const loteId = crypto.randomUUID();
   await pool.query(
-    `INSERT INTO lotes_procesamiento (id, contador_id, cliente_id, estado, total_items) VALUES ($1, $2, $3, 'en_cola', $4)`,
-    [loteId, contadorId, clienteId || null, archivos.length]
+    `INSERT INTO lotes_procesamiento (id, contador_id, cliente_id, estado, total_items, usuario_id) VALUES ($1, $2, $3, 'en_cola', $4, $5)`,
+    [loteId, contadorId, clienteId || null, archivos.length, usuarioId || null]
   );
   for (let i = 0; i < archivos.length; i++) {
     const a = archivos[i];
@@ -95,53 +105,58 @@ async function crearLote(contadorId, clienteId, archivos) {
   return loteId;
 }
 
-// El "motor" de la cola -- toma el lote más viejo que no haya
-// terminado (en_cola o procesando con ítems pendientes) y lo procesa
-// ítem por ítem. Si ya hay un procesamiento en curso en este mismo
-// proceso de Node, no arranca dos a la vez.
+// El "motor" de la cola -- lee un archivo pendiente a la vez, por
+// turnos entre los lotes en curso (el lote que hace más tiempo no
+// recibe turno va primero; ver siguienteItemPorTurno). Si ya hay un
+// procesamiento en curso en este mismo proceso de Node, no arranca dos.
 async function dispararProcesamiento() {
   if (procesandoAhora) return;
   procesandoAhora = true;
   try {
     while (true) {
-      const { rows } = await pool.query(
-        `SELECT id, contador_id FROM lotes_procesamiento WHERE estado IN ('en_cola', 'procesando') ORDER BY created_at ASC LIMIT 1`
+      const item = await siguienteItemPorTurno();
+      if (!item) break; // no hay nada pendiente, se detiene hasta que llegue un lote nuevo
+
+      await pool.query(
+        `UPDATE lotes_procesamiento SET estado = 'procesando', ultimo_turno = now(), updated_at = now() WHERE id = $1`,
+        [item.lote_id]
       );
-      if (rows.length === 0) break; // no hay nada pendiente, se detiene hasta que llegue un lote nuevo
-
-      const lote = rows[0];
-      await pool.query(`UPDATE lotes_procesamiento SET estado = 'procesando', updated_at = now() WHERE id = $1`, [lote.id]);
-
-      const { rows: items } = await pool.query(
-        `SELECT * FROM lote_items WHERE lote_id = $1 AND estado = 'pendiente' AND eliminado = false ORDER BY orden ASC, created_at ASC`,
-        [lote.id]
+      await procesarUnItem(item, item.lote_contador_id);
+      await pool.query(
+        `UPDATE lotes_procesamiento SET items_procesados = items_procesados + 1, updated_at = now() WHERE id = $1`,
+        [item.lote_id]
       );
-
-      for (const item of items) {
-        await procesarUnItem(item, lote.contador_id);
-        await pool.query(
-          `UPDATE lotes_procesamiento SET items_procesados = items_procesados + 1, updated_at = now() WHERE id = $1`,
-          [lote.id]
-        );
-      }
-
-      // ¿Ya no quedan ítems pendientes en este lote? -- se marca
-      // completado. Si alguien agregó más ítems mientras tanto (no
-      // debería pasar hoy, pero por si acaso), el bucle de arriba lo
-      // vuelve a recoger.
-      const { rows: pendientesRestantes } = await pool.query(
-        `SELECT COUNT(*) AS n FROM lote_items WHERE lote_id = $1 AND estado = 'pendiente' AND eliminado = false`,
-        [lote.id]
-      );
-      if (Number(pendientesRestantes[0].n) === 0) {
-        await pool.query(`UPDATE lotes_procesamiento SET estado = 'completado', updated_at = now() WHERE id = $1`, [lote.id]);
-      }
+      await cerrarLotesSinPendientes();
     }
+    await cerrarLotesSinPendientes();
   } catch (err) {
     console.error('Error en el procesamiento de lotes en segundo plano:', err);
   } finally {
     procesandoAhora = false;
   }
+}
+
+// El próximo archivo a leer: del lote en curso que hace más tiempo no
+// recibe turno (uno nuevo, sin turno todavía, va primero), su archivo
+// pendiente de menor orden.
+async function siguienteItemPorTurno() {
+  const { rows } = await pool.query(
+    `SELECT li.*, lp.contador_id AS lote_contador_id
+       FROM lote_items li JOIN lotes_procesamiento lp ON lp.id = li.lote_id
+      WHERE lp.estado IN ('en_cola', 'procesando') AND li.estado = 'pendiente' AND li.eliminado = false
+      ORDER BY lp.ultimo_turno ASC NULLS FIRST, lp.created_at ASC, li.orden ASC, li.created_at ASC
+      LIMIT 1`
+  );
+  return rows[0] || null;
+}
+
+// Un lote sin archivos pendientes queda "completado".
+async function cerrarLotesSinPendientes() {
+  await pool.query(
+    `UPDATE lotes_procesamiento SET estado = 'completado', updated_at = now()
+      WHERE estado IN ('en_cola', 'procesando')
+        AND id NOT IN (SELECT lote_id FROM lote_items WHERE estado = 'pendiente' AND eliminado = false)`
+  );
 }
 
 // Reintenta UN solo ítem (el contador le dio "Reintentar" a una fila
@@ -338,30 +353,62 @@ async function procesarUnItem(item, contadorId) {
   }
 }
 
-// El lote más reciente de este contador que no esté completado (o,
-// si no hay ninguno en curso, el completado más reciente -- para que
-// al volver a Carga masiva siga viendo el último resultado). Se usa
-// tanto para el avisito global como para reconectar la pantalla.
-async function obtenerLoteActivoOUltimo(contadorId) {
-  let { rows } = await pool.query(
-    `SELECT * FROM lotes_procesamiento WHERE contador_id = $1 AND estado IN ('en_cola', 'procesando') ORDER BY created_at ASC LIMIT 1`,
-    [contadorId]
+// Lo pendiente de revisar en Carga masiva para UN usuario y UN cliente
+// (clienteId null = lotes subidos sin cliente fijo): todos los archivos
+// de sus lotes que todavía no se guardaron ni se quitaron, de los
+// últimos DIAS_BANDEJA días -- no solo los del último lote, para que
+// subir un lote nuevo no esconda lo que quedó sin revisar del anterior.
+// Los lotes de antes de este cambio (sin usuario) los ve toda la firma.
+// Devuelve la misma forma que antes tenía "el lote activo" (id, estado,
+// total_items, items_procesados, items), sumando los lotes en curso.
+const DIAS_BANDEJA = 30;
+async function bandejaPendiente(contadorId, usuarioId, clienteId) {
+  const { rows: lotes } = await pool.query(
+    `SELECT * FROM lotes_procesamiento
+      WHERE contador_id = $1 AND (usuario_id = $2 OR usuario_id IS NULL)
+        AND (cliente_id = $3 OR ($3::uuid IS NULL AND cliente_id IS NULL))
+        AND created_at > $4
+      ORDER BY created_at ASC`,
+    [contadorId, usuarioId || null, clienteId || null, new Date(Date.now() - DIAS_BANDEJA * 86400000)]
   );
-  if (rows.length === 0) {
-    ({ rows } = await pool.query(
-      `SELECT * FROM lotes_procesamiento WHERE contador_id = $1 AND estado = 'completado' ORDER BY updated_at DESC LIMIT 1`,
-      [contadorId]
-    ));
-  }
-  if (rows.length === 0) return null;
-
-  const lote = rows[0];
+  if (lotes.length === 0) return null;
   const { rows: items } = await pool.query(
-    `SELECT id, orden, nombre_archivo, media_type, es_pdf, estado, data, error_msg, cliente_id_detectado, tipo_movimiento_detectado
-     FROM lote_items WHERE lote_id = $1 AND eliminado = false ORDER BY orden ASC, created_at ASC`,
-    [lote.id]
+    `SELECT li.id, li.orden, li.nombre_archivo, li.media_type, li.es_pdf, li.estado, li.data, li.error_msg,
+            li.cliente_id_detectado, li.tipo_movimiento_detectado, li.lote_id
+       FROM lote_items li JOIN lotes_procesamiento lp ON lp.id = li.lote_id
+      WHERE li.lote_id = ANY($1::uuid[]) AND li.eliminado = false
+      ORDER BY lp.created_at ASC, li.orden ASC, li.created_at ASC`,
+    [lotes.map((l) => l.id)]
   );
-  return { ...lote, items };
+  const enCurso = lotes.filter((l) => l.estado === 'en_cola' || l.estado === 'procesando');
+  const conItems = new Set(items.map((it) => it.lote_id));
+  // Sin nada pendiente ni en curso, no hay bandeja que mostrar.
+  if (enCurso.length === 0 && conItems.size === 0) return null;
+  const ultimo = lotes[lotes.length - 1];
+  return {
+    id: ultimo.id,
+    cliente_id: clienteId || null,
+    estado: enCurso.length > 0 ? 'procesando' : 'completado',
+    total_items: enCurso.reduce((s, l) => s + Number(l.total_items || 0), 0),
+    items_procesados: enCurso.reduce((s, l) => s + Number(l.items_procesados || 0), 0),
+    items,
+  };
+}
+
+// Los lotes de un usuario en curso, y los terminados en las últimas 24
+// horas, con el nombre del cliente -- para el aviso flotante que sale en
+// todas las páginas.
+async function lotesDelUsuario(contadorId, usuarioId) {
+  const { rows } = await pool.query(
+    `SELECT lp.id, lp.cliente_id, c.nombre AS cliente_nombre, lp.estado, lp.total_items, lp.items_procesados, lp.updated_at
+       FROM lotes_procesamiento lp LEFT JOIN clients c ON c.id = lp.cliente_id
+      WHERE lp.contador_id = $1 AND lp.usuario_id = $2
+        AND (lp.estado IN ('en_cola', 'procesando') OR lp.updated_at > $3)
+      ORDER BY lp.created_at DESC
+      LIMIT 20`,
+    [contadorId, usuarioId, new Date(Date.now() - 86400000)]
+  );
+  return rows;
 }
 
 // El archivo original (base64) de UN ítem puntual -- aparte, para no
@@ -384,6 +431,7 @@ module.exports = {
   dispararProcesamiento,
   reintentarItem,
   eliminarItem,
-  obtenerLoteActivoOUltimo,
+  bandejaPendiente,
+  lotesDelUsuario,
   obtenerArchivoItem,
 };

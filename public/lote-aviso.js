@@ -9,8 +9,8 @@
 // iba a otra página mientras la IA seguía leyendo facturas en segundo
 // plano (el servidor sigue aunque el navegador cambie de pantalla, ver
 // public/lotes.js), no se enteraba de nada hasta volver a entrar a Carga
-// masiva. Este widget consulta el mismo GET /api/lotes/activo (el mismo
-// que ya usa masivo.html para reconectarse) desde CUALQUIER página, y
+// masiva. Este widget consulta GET /api/lotes/mios (los lotes de ESTE
+// usuario, cada uno con su cliente) desde CUALQUIER página, y
 // avisa con una barra pequeña mientras sigue en curso, y con un aviso
 // destacado apenas termina -- sin bloquear nada ni duplicar el detalle
 // que ya muestra Carga masiva.
@@ -119,60 +119,71 @@
     try { return localStorage.getItem(CLAVE_VISTO) === loteId; } catch (e) { return false; }
   }
 
+  // Pide los lotes de ESTE usuario (GET /api/lotes/mios) -- cada uno
+  // con su cliente, así el aviso dice de qué cliente es cada lote y el
+  // enlace abre Carga masiva de ese cliente, nunca el lote de otra
+  // persona de la firma.
+  const urlMasivo = (l) => '/masivo.html' + (l.cliente_id ? '?cliente=' + encodeURIComponent(l.cliente_id) : '');
+  const nombreLote = (l) => l.cliente_nombre || 'sin cliente fijo';
+
   async function consultar() {
     let res;
     try {
-      res = await fetch('/api/lotes/activo');
+      res = await fetch('/api/lotes/mios');
     } catch (e) {
       return; // sin red por un momento -- se reintenta en el próximo ciclo, no hay que avisar de esto
     }
     if (!res.ok) { ocultar(); return; } // 401 (sesión vencida) -- la propia página ya se encarga de redirigir a login
 
-    let lote;
-    try { lote = await res.json(); } catch (e) { return; }
-    if (!lote) { ocultar(); return; } // este contador nunca ha subido un lote
+    let lista;
+    try { lista = await res.json(); } catch (e) { return; }
+    if (!Array.isArray(lista) || lista.length === 0) { ocultar(); return; }
 
-    wrap.dataset.loteId = lote.id;
-    const total = Number(lote.total_items) || 0;
-    const hechos = Number(lote.items_procesados) || 0;
-    const pct = total > 0 ? Math.min(100, Math.round((hechos / total) * 100)) : 0;
-
-    if (lote.estado === 'en_cola' || lote.estado === 'procesando') {
+    const enCurso = lista.filter((l) => l.estado === 'en_cola' || l.estado === 'procesando');
+    if (enCurso.length > 0) {
+      const total = enCurso.reduce((s, l) => s + (Number(l.total_items) || 0), 0);
+      const hechos = enCurso.reduce((s, l) => s + (Number(l.items_procesados) || 0), 0);
+      wrap.dataset.loteId = enCurso[0].id;
       wrap.classList.remove('completado');
       wrap.classList.add('show');
-      document.getElementById('loteAvisoTitulo').textContent = 'Carga masiva en curso';
-      document.getElementById('loteAvisoTexto').textContent =
-        `Procesando lote: ${hechos}/${total} factura${total === 1 ? '' : 's'}`;
-      document.getElementById('loteAvisoBarra').style.width = pct + '%';
+      document.getElementById('loteAvisoTitulo').textContent = enCurso.length === 1 ? 'Carga masiva en curso' : `${enCurso.length} cargas en curso`;
+      document.getElementById('loteAvisoTexto').textContent = enCurso
+        .map((l) => `${nombreLote(l)}: ${Number(l.items_procesados) || 0}/${Number(l.total_items) || 0}`)
+        .join(' · ');
+      document.getElementById('loteAvisoBarra').style.width = (total > 0 ? Math.min(100, Math.round((hechos / total) * 100)) : 0) + '%';
       document.getElementById('loteAvisoCerrar').hidden = true; // no se puede descartar mientras sigue en curso
-      document.getElementById('loteAvisoLink').hidden = true;
-    } else if (lote.estado === 'completado') {
-      if (loteIdDescartado === lote.id) { ocultar(); return; } // el contador ya le dio "✕" a este lote en esta sesión
-      // Si ESTA carga de página todavía no lo había mostrado, y ya figura
-      // como visto en localStorage (de una sesión anterior, o de otra
-      // pestaña), no insistir. Pero si ya lo estamos mostrando ahora
-      // mismo (loteIdMostrado === lote.id), no lo ocultamos solo porque
-      // el siguiente párrafo lo marcó como visto -- eso haría que el
-      // aviso parpadeara y se cerrara solo a los pocos segundos.
-      if (loteIdMostrado !== lote.id && yaVisto(lote.id)) { ocultar(); return; }
-      if (loteIdMostrado !== lote.id) {
-        loteIdMostrado = lote.id;
-        // Se marca como visto apenas se muestra por primera vez (no solo
-        // al hacer clic en "✕") -- así, si el contador cierra el programa
-        // entero sin descartar el aviso a mano, Enlaza no se lo vuelve a
-        // mostrar duplicado la próxima vez que lo abra.
-        try { localStorage.setItem(CLAVE_VISTO, lote.id); } catch (e) { /* localStorage no disponible -- se ignora */ }
-      }
-      wrap.classList.add('show', 'completado');
-      document.getElementById('loteAvisoTitulo').textContent = 'Lote completado';
-      document.getElementById('loteAvisoTexto').textContent =
-        `Ya terminó de procesar tu lote: ${hechos}/${total} factura${total === 1 ? '' : 's'} lista${total === 1 ? '' : 's'} para revisar.`;
-      document.getElementById('loteAvisoBarra').style.width = '100%';
-      document.getElementById('loteAvisoCerrar').hidden = false;
-      document.getElementById('loteAvisoLink').hidden = false;
-    } else {
-      ocultar();
+      const link = document.getElementById('loteAvisoLink');
+      link.href = urlMasivo(enCurso[0]);
+      link.textContent = `Ver ${nombreLote(enCurso[0])} en Carga masiva →`;
+      link.hidden = false;
+      return;
     }
+
+    // Nada en curso: el último lote terminado, si no se ha visto.
+    const lote = lista.find((l) => l.estado === 'completado');
+    if (!lote) { ocultar(); return; }
+    wrap.dataset.loteId = lote.id;
+    if (loteIdDescartado === lote.id) { ocultar(); return; } // el contador ya le dio "✕" a este lote en esta sesión
+    // Si ESTA carga de página todavía no lo había mostrado y ya figura
+    // como visto (de una sesión anterior, o de otra pestaña), no
+    // insistir. Si ya se está mostrando, no se oculta solo porque se
+    // acaba de marcar como visto (si no, el aviso parpadeaba).
+    if (loteIdMostrado !== lote.id && yaVisto(lote.id)) { ocultar(); return; }
+    if (loteIdMostrado !== lote.id) {
+      loteIdMostrado = lote.id;
+      try { localStorage.setItem(CLAVE_VISTO, lote.id); } catch (e) { /* localStorage no disponible -- se ignora */ }
+    }
+    const total = Number(lote.total_items) || 0;
+    wrap.classList.add('show', 'completado');
+    document.getElementById('loteAvisoTitulo').textContent = 'Lote completado';
+    document.getElementById('loteAvisoTexto').textContent =
+      `${nombreLote(lote)}: ${total} factura${total === 1 ? '' : 's'} lista${total === 1 ? '' : 's'} para revisar.`;
+    document.getElementById('loteAvisoBarra').style.width = '100%';
+    document.getElementById('loteAvisoCerrar').hidden = false;
+    const link = document.getElementById('loteAvisoLink');
+    link.href = urlMasivo(lote);
+    link.textContent = 'Ver resultados en Carga masiva →';
+    link.hidden = false;
   }
 
   if (document.readyState === 'loading') {
