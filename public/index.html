@@ -160,10 +160,9 @@
     display:flex; align-items:center; gap:var(--s-3); padding:var(--s-5) 0;
   }
   .dot{ width:16px; height:16px; border-radius:50%; border:2px solid var(--pet-200); border-top-color:var(--pet-600); animation:spin .7s linear infinite; }
-  .pend-inicio{ margin:0 0 16px; padding:12px 14px; border:1px solid var(--warn); border-left-width:4px; border-radius:var(--r-md); background:var(--warn-bg); display:flex; flex-direction:column; gap:6px; }
+  .pend-inicio{ margin:0 0 16px; padding:12px 16px; border:1px solid var(--pet-200); border-left:4px solid var(--pet-600); border-radius:var(--r-md); background:var(--pet-50); display:flex; flex-direction:column; gap:4px; }
   .pend-inicio[hidden]{ display:none; }
-  .pend-fila{ display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--ink); text-decoration:none; font-size:var(--t-14); padding:4px 0; }
-  .pend-fila:hover span:first-child{ text-decoration:underline; }
+  .pend-sub{ font-size:var(--t-12); color:var(--ink-soft); margin-bottom:4px; }
 </style>
 </head>
 <body>
@@ -314,18 +313,20 @@ function renderClients(){
   clientCountBadge.textContent = `${clients.length} cliente${clients.length !== 1 ? 's' : ''}`;
 }
 
-// Clientes con facturas a medias (leídas sin guardar o sin aprobar), de
-// cualquier persona de la firma -- ver /pendientes.js.
+// Facturas leídas en Escanear/Carga masiva que nadie guardó (alguien se
+// salió y las dejó ahí), de cualquier persona de la firma -- ver
+// /pendientes.js.
 function renderPendientesInicio(){
   const el = document.getElementById('pendientesInicio');
-  if (typeof pendientesDeCliente !== 'function') return;
-  const conPendientes = clients.filter((c) => pendientesDeCliente(c.id));
-  const sinCliente = pendientesDeCliente('');
+  if (typeof tieneSinGuardar !== 'function') return;
+  const conPendientes = clients.filter((c) => tieneSinGuardar(c.id));
+  const sinCliente = tieneSinGuardar('');
   if (conPendientes.length === 0 && !sinCliente) { el.hidden = true; return; }
   el.hidden = false;
-  el.innerHTML = `<div class="pend-titulo">Pendientes por revisar</div>` +
-    conPendientes.map((c) => `<a class="pend-fila" href="/cliente.html?id=${encodeURIComponent(c.id)}"><span>${escapeHtml(c.nombre)}</span>${badgePendientesHtml(c.id)}</a>`).join('') +
-    (sinCliente ? `<a class="pend-fila" href="/masivo.html"><span>Sin cliente asignado</span>${badgePendientesHtml('')}</a>` : '');
+  el.innerHTML = `<div class="pend-titulo">Facturas leídas sin guardar</div>
+    <div class="pend-sub">Quedaron en Escanear o Carga masiva sin guardar. Ábrelas para revisarlas y guardarlas.</div>` +
+    conPendientes.map((c) => filaPendientesHtml(c)).join('') +
+    (sinCliente ? filaPendientesHtml({ id: '', nombre: 'Sin cliente asignado' }) : '');
 }
 
 async function loadAll(){
