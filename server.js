@@ -19,6 +19,8 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 // Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
 const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
+// PUC propio de cada cliente (niveles, cuentas obsoletas, cuenta por tarifa)
+const pucCliente = require('./public/puc-cliente');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -485,6 +487,25 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_puc_personalizado_cliente ON puc_personalizado_cliente (contador_id, cliente_id);`);
+  // El PUC completo exportado del programa contable del cliente (Contai,
+  // Siigo...) trae más que código y nombre: si la cuenta recibe
+  // movimiento, si está activa y la tarifa de las cuentas de retención
+  // (ej. 23652502 "RETEFTE SERVICIOS 4%" -> 4). Las cuentas importadas así
+  // no se atan a una categoría fiscal (categoria_concepto = ''): Enlaza
+  // las ofrece según su grupo del PUC (ver public/puc-cliente.js).
+  // `editado`: el contador cambió el nombre o el estado desde Enlaza, y
+  // una nueva importación no debe pisar ese cambio.
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS recibe_movimiento BOOLEAN NOT NULL DEFAULT true;`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS activo BOOLEAN NOT NULL DEFAULT true;`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS porcentaje NUMERIC;`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS tipo_cuenta TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS origen TEXT DEFAULT 'manual';`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS editado BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE puc_personalizado_cliente ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;`);
+  // Cliente NO responsable de IVA (ej. una propiedad horizontal sin
+  // actividad gravada): el IVA de sus compras no es descontable, es más
+  // valor del gasto -- el asiento lo lleva al gasto y no a la 2408.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_mayor_valor_gasto BOOLEAN DEFAULT false;`);
 
   // CREATE TABLE IF NOT EXISTS no agrega columnas nuevas a una tabla que
   // ya existía de antes -- por eso `declarante_renta` (agregado después
@@ -666,6 +687,9 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_asiento_lineas_asiento ON asiento_lineas (asiento_id);`);
+  // La cuenta de la línea es del plan propio del cliente (ver
+  // puc_personalizado_cliente), para marcarla así en pantalla.
+  await pool.query(`ALTER TABLE asiento_lineas ADD COLUMN IF NOT EXISTS cuenta_cliente BOOLEAN NOT NULL DEFAULT false;`);
 
   // ---------- Confianza de la IA + aprobación del contador (Fase 2) ----------
   // `confianza_campos`: JSON (guardado como TEXT, igual que
@@ -1510,10 +1534,27 @@ async function asegurarPlanCuentasContador(contadorId) {
 async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
   try {
     const itemsRes = await pool.query(
-      'SELECT categoria_concepto, subcuenta_gasto, subtotal FROM factura_items WHERE invoice_id = $1 ORDER BY orden',
+      'SELECT categoria_concepto, subcuenta_gasto, subtotal, valor_iva, iva_mayor_valor FROM factura_items WHERE invoice_id = $1 ORDER BY orden',
       [invoiceRow.id]
     );
-    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows);
+    // Plan de cuentas propio del cliente y si es responsable de IVA: el
+    // asiento usa sus cuentas (nombres, auxiliar de retención por tarifa,
+    // cuentas "IVA ..." al gasto). Sin plan propio, el PUC estándar.
+    let pucDelCliente = [];
+    let ivaMayorValorGasto = false;
+    if (invoiceRow.cliente_id) {
+      const [pucRes, cliRes] = await Promise.all([
+        pool.query(
+          `SELECT codigo, concepto, categoria_concepto, recibe_movimiento, activo, porcentaje FROM puc_personalizado_cliente
+           WHERE contador_id = $1 AND cliente_id = $2`,
+          [contadorId, invoiceRow.cliente_id]
+        ),
+        pool.query('SELECT iva_mayor_valor_gasto FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
+      ]);
+      pucDelCliente = pucRes.rows.map((r) => ({ ...r, porcentaje: r.porcentaje === null ? null : Number(r.porcentaje) }));
+      ivaMayorValorGasto = !!(cliRes.rows[0] && cliRes.rows[0].iva_mayor_valor_gasto);
+    }
+    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto });
     if (resultado.error) {
       // No es un error del guardado de la factura -- solo significa que
       // todavía no hay suficiente información (o que es una factura de
@@ -1557,9 +1598,9 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
 
     for (const linea of resultado.lineas) {
       await pool.query(
-        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [crypto.randomUUID(), asientoId, linea.orden, linea.cuenta_codigo, linea.cuenta_nombre, linea.debito, linea.credito]
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [crypto.randomUUID(), asientoId, linea.orden, linea.cuenta_codigo, linea.cuenta_nombre, linea.debito, linea.credito, !!linea.cuenta_cliente]
       );
     }
   } catch (err) {
@@ -1726,6 +1767,8 @@ const CLIENT_EDITABLE_FIELDS = [
   // responsabilidades del RUT), ICA e IVA no vienen de esa lista -- el
   // contador los marca a mano, así que sí se aceptan directo del cliente.
   'agente_retenedor_ica', 'agente_retenedor_iva',
+  // No responsable de IVA: el IVA de sus compras va al gasto (ver asientos.js)
+  'iva_mayor_valor_gasto',
 ];
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
@@ -1747,6 +1790,9 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     }
     if (updates.agente_retenedor_iva !== undefined) {
       updates.agente_retenedor_iva = !!updates.agente_retenedor_iva;
+    }
+    if (updates.iva_mayor_valor_gasto !== undefined) {
+      updates.iva_mayor_valor_gasto = !!updates.iva_mayor_valor_gasto;
     }
 
     const keys = Object.keys(updates);
@@ -1788,26 +1834,35 @@ const CATEGORIAS_CONCEPTO_VALIDAS = [
   'servicios_publicos', 'otro',
 ];
 
-// Encabezados aceptados en el CSV de importación masiva -- igual de
-// tolerante que el importador de extractos bancarios (cartera.js):
-// acepta con/sin tilde y algunos sinónimos razonables.
-const PUC_COLUMNAS_CATEGORIA = ['categoria_fiscal', 'categoria', 'categoría'];
-const PUC_COLUMNAS_CODIGO = ['codigo', 'código', 'cuenta', 'codigo puc', 'código puc'];
-const PUC_COLUMNAS_CONCEPTO = ['concepto', 'nombre', 'descripcion', 'descripción'];
+// Lectura de columnas del CSV/Excel del plan de cuentas y de sus valores
+// (S/N, porcentajes): ver filasPucDesdeTabla() en public/puc-cliente.js.
+const { leerSiNoPuc, leerPorcentajePuc, filasPucDesdeTabla } = pucCliente;
 
-// Lista los códigos personalizados de un cliente, agrupados implícitamente
-// por categoria_concepto (el navegador los agrupa para mostrarlos).
+// Una fila de la tabla tal como la usa el navegador: con el nivel del PUC
+// y, si aplica, por qué la cuenta parece obsoleta (para depurar el plan).
+function filaPucParaNavegador(r) {
+  return {
+    ...r,
+    porcentaje: r.porcentaje === null || r.porcentaje === undefined ? null : Number(r.porcentaje),
+    nivel: pucCliente.nivelDeCodigo(r.codigo),
+    obsoleta: pucCliente.motivoObsoleta(r.codigo, r.concepto),
+  };
+}
+const PUC_CAMPOS_SELECT = `id, categoria_concepto, codigo, concepto, recibe_movimiento, activo, porcentaje, tipo_cuenta, origen, editado`;
+
+// Lista el PUC propio del cliente, ordenado por código: las cuentas
+// importadas de su programa contable y las que el contador agregó a mano.
 app.get('/api/clients/:id/puc', requireAuth, async (req, res) => {
   try {
     if (!(await clienteEsDelContador(req, req.params.id))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
     const { rows } = await pool.query(
-      `SELECT id, categoria_concepto, codigo, concepto FROM puc_personalizado_cliente
-       WHERE contador_id = $1 AND cliente_id = $2 ORDER BY categoria_concepto ASC, codigo ASC`,
+      `SELECT ${PUC_CAMPOS_SELECT} FROM puc_personalizado_cliente
+       WHERE contador_id = $1 AND cliente_id = $2 ORDER BY codigo ASC`,
       [req.firmaId, req.params.id]
     );
-    res.json(rows);
+    res.json(rows.map(filaPucParaNavegador));
   } catch (err) {
     console.error('Error leyendo el PUC personalizado del cliente:', err);
     res.status(500).json({ error: 'No se pudo leer el PUC personalizado de este cliente.' });
@@ -1827,17 +1882,27 @@ app.post('/api/clients/:id/puc', requireAuth, requireRole('administrador', 'cont
     if (!codigo || !concepto) {
       return res.status(400).json({ error: 'Código y concepto son obligatorios.' });
     }
-    if (!CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
+    if (!/^\d{1,12}$/.test(codigo)) {
+      return res.status(400).json({ error: 'El código de la cuenta debe tener solo números (ej. 51451501).' });
+    }
+    // Categoría vacía = "según su grupo del PUC" (ej. una 5135xx se ofrece
+    // para servicios), igual que las cuentas importadas.
+    if (categoria && !CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
       return res.status(400).json({ error: `"${categoria}" no es una categoría fiscal válida.` });
     }
+    const porcentaje = leerPorcentajePuc(req.body.porcentaje);
+    const recibe = req.body.recibe_movimiento === undefined ? true : !!req.body.recibe_movimiento;
     const { rows } = await pool.query(
-      `INSERT INTO puc_personalizado_cliente (id, contador_id, cliente_id, categoria_concepto, codigo, concepto)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET categoria_concepto = $4, concepto = $6
-       RETURNING id, categoria_concepto, codigo, concepto`,
-      [crypto.randomUUID(), req.firmaId, req.params.id, categoria, codigo, concepto]
+      `INSERT INTO puc_personalizado_cliente
+         (id, contador_id, cliente_id, categoria_concepto, codigo, concepto, porcentaje, recibe_movimiento, origen, editado, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'manual',true,now())
+       ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET categoria_concepto = $4, concepto = $6,
+         porcentaje = COALESCE($7, puc_personalizado_cliente.porcentaje), recibe_movimiento = $8,
+         activo = true, editado = true, updated_at = now()
+       RETURNING ${PUC_CAMPOS_SELECT}`,
+      [crypto.randomUUID(), req.firmaId, req.params.id, categoria, codigo, concepto, porcentaje, recibe]
     );
-    res.status(201).json(rows[0]);
+    res.status(201).json(filaPucParaNavegador(rows[0]));
   } catch (err) {
     console.error('Error creando código de PUC personalizado:', err);
     res.status(500).json({ error: 'No se pudo crear el código personalizado.' });
@@ -1859,34 +1924,75 @@ app.post('/api/clients/:id/puc', requireAuth, requireRole('administrador', 'cont
 // esa columna, o la IA no pudo inferirla) se guarda como "otro" en vez
 // de rechazar la fila completa -- lo único realmente indispensable para
 // un código personalizado es el código y el concepto.
-async function guardarFilasPucValidas(contadorId, clienteId, filasCrudas) {
-  const validas = [];
+//
+// Desde el PUC completo del programa contable del cliente, la categoría
+// queda vacía ('' = "según el grupo del PUC", ver public/puc-cliente.js)
+// y se guardan también nivel de movimiento, estado y tarifa.
+//
+// Al volver a importar, lo que el contador ya ajustó en Enlaza (nombre,
+// activa/inactiva, recibe movimiento -- columna `editado`) se respeta; el
+// resto se actualiza con el archivo nuevo.
+async function guardarFilasPucValidas(contadorId, clienteId, filasCrudas, origen = 'importado') {
+  const porCodigo = new Map(); // un código repetido en el archivo: gana la última fila
   const errores = [];
   filasCrudas.forEach((fila, i) => {
     const numeroFila = fila.numeroFila || i + 1;
-    let categoria = String(fila.categoria || '').trim().toLowerCase();
-    const codigo = String(fila.codigo || '').trim();
-    const concepto = String(fila.concepto || '').trim();
+    const categoria = String(fila.categoria || '').trim().toLowerCase();
+    const codigo = String(fila.codigo || '').trim().replace(/[.\s]/g, '');
+    const concepto = String(fila.concepto || '').replace(/\s+/g, ' ').trim();
     if (!categoria && !codigo && !concepto) return; // fila vacía
     if (!codigo || !concepto) { errores.push({ fila: numeroFila, motivo: 'Falta código o concepto.' }); return; }
-    if (!categoria) categoria = 'otro';
-    if (!CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
+    if (!/^\d{1,12}$/.test(codigo)) { errores.push({ fila: numeroFila, motivo: `"${codigo}" no es un código de cuenta (solo números).` }); return; }
+    if (categoria && !CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
       errores.push({ fila: numeroFila, motivo: `"${categoria}" no es una categoría fiscal válida.` });
       return;
     }
-    validas.push({ categoria, codigo, concepto });
+    porCodigo.set(codigo, {
+      categoria,
+      codigo,
+      concepto,
+      recibe: leerSiNoPuc(fila.recibe_movimiento, true),
+      activo: leerSiNoPuc(fila.activo, true),
+      porcentaje: leerPorcentajePuc(fila.porcentaje),
+      tipo: String(fila.tipo_cuenta || '').trim().toUpperCase().slice(0, 10),
+    });
   });
+  const validas = [...porCodigo.values()];
 
-  for (const v of validas) {
+  // Un PUC completo trae cientos de cuentas: se guardan en bloques con
+  // unnest() en vez de una consulta por cuenta.
+  const BLOQUE = 400;
+  for (let i = 0; i < validas.length; i += BLOQUE) {
+    const b = validas.slice(i, i + BLOQUE);
     await pool.query(
-      `INSERT INTO puc_personalizado_cliente (id, contador_id, cliente_id, categoria_concepto, codigo, concepto)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET categoria_concepto = $4, concepto = $6`,
-      [crypto.randomUUID(), contadorId, clienteId, v.categoria, v.codigo, v.concepto]
+      `INSERT INTO puc_personalizado_cliente AS puc
+         (id, contador_id, cliente_id, categoria_concepto, codigo, concepto, recibe_movimiento, activo, porcentaje, tipo_cuenta, origen, updated_at)
+       SELECT u.id, $2, $3, u.cat, u.codigo, u.concepto, u.recibe, u.activo, u.pct, u.tipo, $11, now()
+       FROM unnest($1::uuid[], $4::text[], $5::text[], $6::text[], $7::boolean[], $8::boolean[], $9::numeric[], $10::text[])
+         AS u(id, cat, codigo, concepto, recibe, activo, pct, tipo)
+       ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET
+         concepto = CASE WHEN puc.editado THEN puc.concepto ELSE EXCLUDED.concepto END,
+         categoria_concepto = CASE WHEN EXCLUDED.categoria_concepto <> '' THEN EXCLUDED.categoria_concepto ELSE puc.categoria_concepto END,
+         recibe_movimiento = CASE WHEN puc.editado THEN puc.recibe_movimiento ELSE EXCLUDED.recibe_movimiento END,
+         activo = CASE WHEN puc.editado THEN puc.activo ELSE EXCLUDED.activo END,
+         porcentaje = COALESCE(EXCLUDED.porcentaje, puc.porcentaje),
+         tipo_cuenta = COALESCE(NULLIF(EXCLUDED.tipo_cuenta, ''), puc.tipo_cuenta),
+         updated_at = now()`,
+      [
+        b.map(() => crypto.randomUUID()), contadorId, clienteId,
+        b.map((v) => v.categoria), b.map((v) => v.codigo), b.map((v) => v.concepto),
+        b.map((v) => v.recibe), b.map((v) => v.activo), b.map((v) => v.porcentaje), b.map((v) => v.tipo),
+        origen,
+      ]
     );
   }
 
-  return { importados: validas.length, errores };
+  return {
+    importados: validas.length,
+    errores,
+    recibenMovimiento: validas.filter((v) => v.recibe && v.activo).length,
+    posiblesObsoletas: validas.filter((v) => v.recibe && pucCliente.motivoObsoleta(v.codigo, v.concepto)).length,
+  };
 }
 
 app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
@@ -1901,45 +2007,13 @@ app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrado
     if (filas.length < 2) {
       return res.status(400).json({ error: 'El archivo no parece tener datos -- se necesita una fila de encabezados y al menos una fila con un código.' });
     }
-    const encabezados = filas[0].map(cartera.normalizarEncabezado);
-    // La columna de categoría es OPCIONAL -- distintos sistemas externos
-    // (Contaia, Siigo, Excel armado a mano...) no siempre la traen, y
-    // antes el importador rechazaba el archivo completo si no aparecía
-    // con uno de estos nombres exactos. Ahora, si no se encuentra, cada
-    // fila se guarda con categoría "otro" (se puede reclasificar luego a
-    // mano desde la tabla de arriba).
-    //
-    // Además de los sinónimos de una sola palabra (PUC_COLUMNAS_*), un
-    // plan de cuentas real (ej. exportado de Siigo) suele traer el
-    // encabezado en DOS palabras -- "Código Cuenta", "Nombre Cuenta" --
-    // que no calza con una igualdad exacta. encontrarColumnaPuc() primero
-    // intenta la igualdad exacta de siempre y, si no la encuentra, cae a
-    // buscar la palabra clave COMO SUBSTRING dentro del encabezado
-    // completo (ignorando acentos), sin repetir una columna ya asignada.
-    const quitarAcentos = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    function encontrarColumnaPuc(listaExacta, palabrasClaveSubstring, usados) {
-      let i = encabezados.findIndex((h, pos) => !usados.includes(pos) && listaExacta.includes(h));
-      if (i !== -1) return i;
-      return encabezados.findIndex((h, pos) => !usados.includes(pos) && palabrasClaveSubstring.some((p) => quitarAcentos(h).includes(p)));
-    }
-    const iCategoria = encontrarColumnaPuc(PUC_COLUMNAS_CATEGORIA, ['categoria'], []);
-    const usadosTrasCategoria = iCategoria === -1 ? [] : [iCategoria];
-    const iCodigo = encontrarColumnaPuc(PUC_COLUMNAS_CODIGO, ['codigo'], usadosTrasCategoria);
-    const usadosTrasCodigo = iCodigo === -1 ? usadosTrasCategoria : [...usadosTrasCategoria, iCodigo];
-    const iConcepto = encontrarColumnaPuc(PUC_COLUMNAS_CONCEPTO, ['nombre', 'concepto', 'descripcion'], usadosTrasCodigo);
-    if (iCodigo === -1 || iConcepto === -1) {
-      return res.status(400).json({ error: 'No se reconocieron las columnas del archivo -- se necesita al menos una columna de "codigo" y una de "concepto" en la primera fila.' });
-    }
-
-    const filasCrudas = [];
-    for (let r = 1; r < filas.length; r++) {
-      const fila = filas[r];
-      filasCrudas.push({
-        numeroFila: r + 1,
-        categoria: iCategoria === -1 ? '' : fila[iCategoria],
-        codigo: fila[iCodigo],
-        concepto: fila[iConcepto],
-      });
+    const { filasCrudas, error } = filasPucDesdeTabla(filas);
+    if (error) return res.status(400).json({ error });
+    // Un archivo guardado en Latin-1 que llegó leído como UTF-8 trae "�"
+    // en lugar de las tildes; el navegador ya intenta leerlo bien, esto es
+    // solo por si alguien llama a la API directamente.
+    if (csvTexto.includes('\uFFFD')) {
+      console.warn('PUC importado con caracteres ilegibles (codificación del archivo)');
     }
 
     const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas);
@@ -1999,7 +2073,7 @@ app.post('/api/clients/:id/puc/leer-ia', requireAuth, requireRole('administrador
       return res.status(400).json({ error: 'No se pudo identificar ningún código de cuenta en este documento.' });
     }
 
-    const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas);
+    const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas, 'ia');
     if (resultado.importados === 0) {
       return res.status(400).json({ error: 'Ninguna fila del documento se pudo importar.', errores: resultado.errores });
     }
@@ -2025,6 +2099,89 @@ app.delete('/api/clients/:id/puc/:pucId', requireAuth, requireRole('administrado
   } catch (err) {
     console.error('Error eliminando código de PUC personalizado:', err);
     res.status(500).json({ error: 'No se pudo eliminar el código personalizado.' });
+  }
+});
+
+// Edita una cuenta del PUC del cliente desde Enlaza (nombre, activa,
+// recibe movimiento, categoría, tarifa) -- así no hay que corregirla en
+// el programa contable y volver a importar. Queda marcada `editado` para
+// que una importación posterior no deshaga el cambio.
+app.patch('/api/clients/:id/puc/:pucId', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const cambios = {};
+    if (req.body.concepto !== undefined) {
+      const concepto = String(req.body.concepto || '').replace(/\s+/g, ' ').trim();
+      if (!concepto) return res.status(400).json({ error: 'El nombre de la cuenta no puede quedar vacío.' });
+      cambios.concepto = concepto;
+    }
+    if (req.body.activo !== undefined) cambios.activo = !!req.body.activo;
+    if (req.body.recibe_movimiento !== undefined) cambios.recibe_movimiento = !!req.body.recibe_movimiento;
+    if (req.body.porcentaje !== undefined) cambios.porcentaje = leerPorcentajePuc(req.body.porcentaje);
+    if (req.body.categoria_concepto !== undefined) {
+      const categoria = String(req.body.categoria_concepto || '').trim().toLowerCase();
+      if (categoria && !CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
+        return res.status(400).json({ error: `"${categoria}" no es una categoría fiscal válida.` });
+      }
+      cambios.categoria_concepto = categoria;
+    }
+    const campos = Object.keys(cambios);
+    if (campos.length === 0) return res.status(400).json({ error: 'No se envió ningún cambio.' });
+    const set = campos.map((c, i) => `${c} = $${i + 4}`).join(', ');
+    const { rows } = await pool.query(
+      `UPDATE puc_personalizado_cliente SET ${set}, editado = true, updated_at = now()
+       WHERE id = $1 AND contador_id = $2 AND cliente_id = $3
+       RETURNING ${PUC_CAMPOS_SELECT}`,
+      [req.params.pucId, req.firmaId, req.params.id, ...campos.map((c) => cambios[c])]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Cuenta no encontrada.' });
+    res.json(filaPucParaNavegador(rows[0]));
+  } catch (err) {
+    console.error('Error editando cuenta del PUC del cliente:', err);
+    res.status(500).json({ error: 'No se pudo guardar el cambio de la cuenta.' });
+  }
+});
+
+// Activa o desactiva varias cuentas de una vez (ej. las 61 de ajustes por
+// inflación y corrección monetaria que ya no se usan). Desactivar no
+// borra: la cuenta deja de ofrecerse al causar y se puede reactivar.
+app.post('/api/clients/:id/puc/estado', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)) : [];
+    if (ids.length === 0) return res.status(400).json({ error: 'No se seleccionó ninguna cuenta.' });
+    const { rowCount } = await pool.query(
+      `UPDATE puc_personalizado_cliente SET activo = $4, editado = true, updated_at = now()
+       WHERE contador_id = $1 AND cliente_id = $2 AND id = ANY($3::uuid[])`,
+      [req.firmaId, req.params.id, ids, !!req.body.activo]
+    );
+    res.json({ actualizadas: rowCount });
+  } catch (err) {
+    console.error('Error cambiando el estado de cuentas del PUC del cliente:', err);
+    res.status(500).json({ error: 'No se pudo cambiar el estado de las cuentas.' });
+  }
+});
+
+// Borra el PUC completo del cliente (para reemplazarlo por otro archivo).
+// Las facturas ya causadas guardan su código, así que no se pierden.
+app.delete('/api/clients/:id/puc', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    if (req.query.confirmar !== '1') return res.status(400).json({ error: 'Falta confirmar el borrado del plan completo.' });
+    const { rowCount } = await pool.query(
+      `DELETE FROM puc_personalizado_cliente WHERE contador_id = $1 AND cliente_id = $2`,
+      [req.firmaId, req.params.id]
+    );
+    res.json({ borradas: rowCount });
+  } catch (err) {
+    console.error('Error borrando el PUC del cliente:', err);
+    res.status(500).json({ error: 'No se pudo borrar el plan de cuentas.' });
   }
 });
 
@@ -2106,17 +2263,29 @@ app.get('/api/articulo-383-por-nit', requireAuth, async (req, res) => {
 app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT DISTINCT ON (i.nit_cc, fi.categoria_concepto) i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto, i.cliente_id
+      `SELECT DISTINCT ON (i.cliente_id, i.nit_cc, fi.categoria_concepto) i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto, i.cliente_id, i.saved_at
          FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
         WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
           AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
-        ORDER BY i.nit_cc, fi.categoria_concepto, i.saved_at DESC`,
+        ORDER BY i.cliente_id, i.nit_cc, fi.categoria_concepto, i.saved_at DESC`,
       [req.firmaId]
     );
+    // Dos claves: "NIT|categoria" (lo último usado con ese proveedor, en
+    // cualquier cliente) y "clienteId|NIT|categoria" (con ese cliente:
+    // cada cliente puede tener su propio plan de cuentas).
     const mapa = {};
+    const fechaGeneral = {};
     rows
       .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
-      .forEach((r) => { mapa[`${normalizarNit(r.nit_cc)}|${String(r.categoria_concepto).toLowerCase()}`] = r.subcuenta_gasto; });
+      .forEach((r) => {
+        const clave = `${normalizarNit(r.nit_cc)}|${String(r.categoria_concepto).toLowerCase()}`;
+        if (r.cliente_id) mapa[`${r.cliente_id}|${clave}`] = r.subcuenta_gasto;
+        const fecha = r.saved_at ? new Date(r.saved_at).getTime() : 0;
+        if (!(clave in fechaGeneral) || fecha > fechaGeneral[clave]) {
+          fechaGeneral[clave] = fecha;
+          mapa[clave] = r.subcuenta_gasto;
+        }
+      });
     res.json(mapa);
   } catch (err) {
     console.error('Error leyendo subcuentas aprendidas:', err);
@@ -2966,7 +3135,7 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
       }
     }
     const lineas = await pool.query(
-      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
       [req.params.id]
     );
     res.json({ ...cabecera.rows[0], lineas: lineas.rows });
@@ -3055,13 +3224,22 @@ app.put('/api/asientos/:id/lineas', requireAuth, requireRole('administrador', 'c
       }
     }
 
+    // Qué códigos son del plan propio del cliente de la factura (para
+    // seguir marcándolos así después de editar a mano).
+    const codigosDelCliente = new Set((await pool.query(
+      `SELECT p.codigo FROM puc_personalizado_cliente p JOIN invoices i ON i.cliente_id = p.cliente_id
+        WHERE i.id = $1 AND p.contador_id = $2`,
+      [asiento.rows[0].invoice_id, req.firmaId]
+    )).rows.map((r) => r.codigo));
+
     await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [req.params.id]);
     let orden = 0;
     for (const l of lineasBody) {
+      const codigo = String(l.cuenta_codigo).trim();
       await pool.query(
-        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [crypto.randomUUID(), req.params.id, orden++, String(l.cuenta_codigo).trim(), String(l.cuenta_nombre || '').trim(), Number(l.debito) || 0, Number(l.credito) || 0]
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [crypto.randomUUID(), req.params.id, orden++, codigo, String(l.cuenta_nombre || '').trim(), Number(l.debito) || 0, Number(l.credito) || 0, codigosDelCliente.has(codigo)]
       );
     }
     // Deja constancia de que un humano tocó las líneas directamente --
@@ -3069,7 +3247,7 @@ app.put('/api/asientos/:id/lineas', requireAuth, requireRole('administrador', 'c
     await pool.query(`UPDATE asientos_contables SET generado_por = 'contador' WHERE id = $1`, [req.params.id]);
 
     const lineasFinal = await pool.query(
-      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
       [req.params.id]
     );
     // Si la factura ya estaba aprobada (lo normal es corregir el asiento

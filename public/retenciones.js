@@ -915,8 +915,8 @@ function subcuentaPorTexto(categoria, texto) {
 // lo aprendido con ese proveedor, el servicio público que dice el
 // documento, las palabras del texto, y si nada aplica, '' (la pantalla
 // usa la primera opción de la lista).
-function subcuentaSugerida(nit, categoria, texto) {
-  return subcuentaAprendida(nit, categoria)
+function subcuentaSugerida(nit, categoria, texto, clienteId) {
+  return subcuentaAprendida(nit, categoria, clienteId)
     || (categoria === 'servicios_publicos' ? subcuentaServicioPublico(texto) : '')
     || subcuentaPorTexto(categoria, texto);
 }
@@ -931,10 +931,14 @@ let SUBCUENTAS_APRENDIDAS = {};
 function registrarSubcuentasAprendidas(mapa) {
   SUBCUENTAS_APRENDIDAS = mapa && typeof mapa === 'object' ? mapa : {};
 }
-function subcuentaAprendida(nit, categoria) {
+// Con `clienteId`, primero lo aprendido con ESE cliente (clave
+// "clienteId|NIT|categoria"): con planes de cuentas propios, el auxiliar
+// que se usó para otro cliente puede no existir en el de este.
+function subcuentaAprendida(nit, categoria, clienteId) {
   const nitLimpio = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
   if (!nitLimpio || !categoria) return '';
-  return SUBCUENTAS_APRENDIDAS[`${nitLimpio}|${String(categoria).toLowerCase()}`] || '';
+  const clave = `${nitLimpio}|${String(categoria).toLowerCase()}`;
+  return (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
 }
 
 // ---------- AIU consolidado (vigilancia, aseo, temporales) ----------
