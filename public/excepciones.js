@@ -92,6 +92,14 @@ function dvNoCoincide(inv) {
 
 const DEFINICIONES_EXCEPCIONES = [
   {
+    // La misma factura no se causa dos veces (ver duplicados.js): aviso
+    // desde que se lee, con la factura ya guardada con la que coincide.
+    tipo: 'posible_duplicado',
+    etiqueta: 'Posible duplicado',
+    detecta: (inv) => !!(inv.posible_duplicado && inv.posible_duplicado.mensaje),
+    detalle: (inv) => `${inv.posible_duplicado.mensaje} Revisa antes de guardarla para no causarla dos veces.`,
+  },
+  {
     tipo: 'sin_nit',
     etiqueta: 'Sin NIT',
     detecta: (inv) => !soloDigitosParaExcepciones(inv.nit_cc),

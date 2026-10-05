@@ -2371,6 +2371,14 @@ function renderResult(data){
       texto: `El documento escribe "${data.valor_letras_texto}" (≈ $${valorLetrasNumero.toLocaleString('es-CO')}), pero el valor en números es $${valorConIvaNumero.toLocaleString('es-CO')}. Puede ser un error de digitación del proveedor -- revisa el documento original y corrige el valor correcto arriba antes de guardar.`,
     });
   }
+  // Posible duplicado: ya hay una factura guardada que coincide (ver
+  // duplicados.js). Va de primero: es lo más importante de revisar.
+  if (tieneExcepcion(data, 'posible_duplicado')) {
+    avisos.unshift({
+      titulo: '⚠ Posible duplicado: esta factura parece ya causada',
+      texto: (listaExcepciones(data).find((x) => x.tipo === 'posible_duplicado') || {}).detalle || '',
+    });
+  }
   avisosDocumentoEl.innerHTML = avisos.map(a => `<div class="aviso-doc"><b>${escapeHtml(a.titulo)}</b>${escapeHtml(a.texto)}</div>`).join('');
 
   renderItemsPanel();
