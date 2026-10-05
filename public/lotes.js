@@ -81,6 +81,32 @@ async function asegurarSchemaLotes() {
   await pool.query(`ALTER TABLE lotes_procesamiento ADD COLUMN IF NOT EXISTS usuario_id UUID;`);
   await pool.query(`ALTER TABLE lotes_procesamiento ADD COLUMN IF NOT EXISTS ultimo_turno TIMESTAMPTZ;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_lotes_usuario_cliente ON lotes_procesamiento (contador_id, usuario_id, cliente_id);`);
+  // De dónde vino: 'masivo' (Carga masiva) o 'escaner' (una lectura de
+  // Escanear guardada para no perderla al cambiar de aparato o recargar).
+  await pool.query(`ALTER TABLE lotes_procesamiento ADD COLUMN IF NOT EXISTS origen TEXT NOT NULL DEFAULT 'masivo';`);
+}
+
+// Guarda una factura YA LEÍDA en Escanear como pendiente de revisar de
+// este usuario y este cliente -- así no se pierde si se recarga la
+// página o se sigue revisando desde otro aparato (ej. se fotografió en
+// el celular y se revisa en el portátil). Queda como un lote de un solo
+// archivo, origen 'escaner', ya terminado: aparece en Escanear y en
+// Carga masiva de ese cliente hasta que se guarde o se quite.
+async function guardarLecturaEscaner(contadorId, usuarioId, clienteId, archivo, parsed) {
+  const loteId = crypto.randomUUID();
+  const itemId = crypto.randomUUID();
+  await pool.query(
+    `INSERT INTO lotes_procesamiento (id, contador_id, cliente_id, estado, total_items, items_procesados, usuario_id, origen)
+     VALUES ($1, $2, $3, 'completado', 1, 1, $4, 'escaner')`,
+    [loteId, contadorId, clienteId || null, usuarioId || null]
+  );
+  await pool.query(
+    `INSERT INTO lote_items (id, lote_id, orden, nombre_archivo, base64, media_type, es_pdf, estado)
+     VALUES ($1, $2, 0, $3, $4, $5, $6, 'procesando')`,
+    [itemId, loteId, archivo.nombre || '', archivo.base64 || '', archivo.mediaType || '', !!archivo.isPdf]
+  );
+  await guardarResultadoDocumento(itemId, contadorId, { tipo: 'factura', data: parsed });
+  return itemId;
 }
 
 // Crea un lote nuevo con sus archivos (todavía "en_cola"), y dispara el
@@ -374,7 +400,7 @@ async function bandejaPendiente(contadorId, usuarioId, clienteId) {
   if (lotes.length === 0) return null;
   const { rows: items } = await pool.query(
     `SELECT li.id, li.orden, li.nombre_archivo, li.media_type, li.es_pdf, li.estado, li.data, li.error_msg,
-            li.cliente_id_detectado, li.tipo_movimiento_detectado, li.lote_id
+            li.cliente_id_detectado, li.tipo_movimiento_detectado, li.lote_id, lp.origen
        FROM lote_items li JOIN lotes_procesamiento lp ON lp.id = li.lote_id
       WHERE li.lote_id = ANY($1::uuid[]) AND li.eliminado = false
       ORDER BY lp.created_at ASC, li.orden ASC, li.created_at ASC`,
@@ -402,7 +428,7 @@ async function lotesDelUsuario(contadorId, usuarioId) {
   const { rows } = await pool.query(
     `SELECT lp.id, lp.cliente_id, c.nombre AS cliente_nombre, lp.estado, lp.total_items, lp.items_procesados, lp.updated_at
        FROM lotes_procesamiento lp LEFT JOIN clients c ON c.id = lp.cliente_id
-      WHERE lp.contador_id = $1 AND lp.usuario_id = $2
+      WHERE lp.contador_id = $1 AND lp.usuario_id = $2 AND lp.origen = 'masivo'
         AND (lp.estado IN ('en_cola', 'procesando') OR lp.updated_at > $3)
       ORDER BY lp.created_at DESC
       LIMIT 20`,
@@ -433,5 +459,6 @@ module.exports = {
   eliminarItem,
   bandejaPendiente,
   lotesDelUsuario,
+  guardarLecturaEscaner,
   obtenerArchivoItem,
 };

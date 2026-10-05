@@ -4824,6 +4824,33 @@ app.get('/api/lotes/activo', requireAuth, async (req, res) => {
   }
 });
 
+// Escanear guarda aquí cada factura apenas se lee (imagen + lectura),
+// como pendiente de este usuario y este cliente, para que no se pierda
+// al recargar la página o al seguir revisando desde otro aparato.
+app.post('/api/lotes/escaner', requireAuth, async (req, res) => {
+  try {
+    const { clienteId, nombre, base64, mediaType, isPdf, data } = req.body || {};
+    if (!base64 || !data || typeof data !== 'object') {
+      return res.status(400).json({ error: 'Falta la imagen o la lectura de la factura.' });
+    }
+    if (!puedeAccederCliente(req, clienteId || null)) {
+      return res.status(403).json({ error: 'Debes escoger uno de tus clientes asignados.' });
+    }
+    if (clienteId && !(await clienteEsDelContador(req, clienteId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const itemId = await lotes.guardarLecturaEscaner(
+      req.firmaId, req.userId, clienteId || null,
+      { nombre: String(nombre || '').slice(0, 200), base64: String(base64), mediaType: String(mediaType || ''), isPdf: !!isPdf },
+      data
+    );
+    res.status(201).json({ itemId });
+  } catch (err) {
+    console.error('Error guardando la lectura de Escanear:', err);
+    res.status(500).json({ error: 'No se pudo guardar la lectura como pendiente.' });
+  }
+});
+
 // Los lotes de este usuario (en curso y terminados hoy), con su cliente
 // -- para el aviso flotante de lote-aviso.js en todas las páginas.
 app.get('/api/lotes/mios', requireAuth, async (req, res) => {
