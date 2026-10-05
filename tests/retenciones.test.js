@@ -538,3 +538,20 @@ test('subcuentaAprendida: primero lo aprendido con ese cliente, luego lo general
   assert.equal(R.subcuentaAprendida('900111222', 'servicios'), '514510');
   R.registrarSubcuentasAprendidas({});
 });
+
+test('servicios públicos con un ítem por servicio: cada línea a su subcuenta, aunque haya una aprendida', () => {
+  const R = require('../public/retenciones');
+  R.registrarSubcuentasAprendidas({ '890904996|servicios_publicos': '513530' });
+  const items = R.normalizarItemsDesdeIA({
+    nit_cc: '890904996', nombre_razon_social: 'EMPRESAS PUBLICAS DE MEDELLIN E.S.P.', categoria_concepto: 'servicios_publicos', valor_sin_iva: 787486,
+    items: [
+      { descripcion: 'Acueducto 4 m3', subtotal: 47512, categoria_concepto: 'servicios_publicos' },
+      { descripcion: 'Alcantarillado 4 m3', subtotal: 34117, categoria_concepto: 'servicios_publicos' },
+      { descripcion: 'Energía 544 kWh', subtotal: 501231, categoria_concepto: 'servicios_publicos' },
+      { descripcion: 'Otras entidades', subtotal: 679, categoria_concepto: 'servicios_publicos' },
+      { descripcion: 'Acuerdos de pago', subtotal: 203947, categoria_concepto: 'otro' },
+    ],
+  }, ['servicios_publicos', 'otro']);
+  R.registrarSubcuentasAprendidas({});
+  assert.deepEqual(items.map((it) => it.subcuenta_gasto), ['513525', '513525', '513530', '513530', '']);
+});

@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
+<script src="/comprimir-imagen.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -1251,6 +1252,11 @@ function urlBandejaEscaner(){
   return '/api/lotes/activo' + (clientePreseleccionado ? '?cliente=' + encodeURIComponent(clientePreseleccionado.id) : '');
 }
 
+// Facturas pendientes que se quitaron o guardaron en esta pantalla: no
+// se vuelven a traer aunque la consulta periódica llegue antes de que el
+// servidor termine de borrarlas.
+const pendientesDescartados = new Set();
+
 async function restaurarColaDesdeDB(){
   try {
     const res = await fetch(urlBandejaEscaner());
@@ -1259,7 +1265,7 @@ async function restaurarColaDesdeDB(){
     const items = (bandeja && Array.isArray(bandeja.items) ? bandeja.items : [])
       .filter((it) => it.origen === 'escaner' && (it.estado === 'listo' || it.estado === 'revisar'));
     for (const it of items) {
-      if (colaCapturas.some((c) => c.loteItemId === it.id)) continue;
+      if (pendientesDescartados.has(it.id) || colaCapturas.some((c) => c.loteItemId === it.id)) continue;
       let data = null;
       try { data = typeof it.data === 'string' ? JSON.parse(it.data) : it.data; } catch (e) { continue; }
       const resArchivo = await fetch(`/api/lotes/items/${encodeURIComponent(it.id)}/archivo`);
@@ -1316,10 +1322,17 @@ async function eliminarCapturaDeDB(entryOId){
   const entry = typeof entryOId === 'object' ? entryOId : colaCapturas.find((c) => c.id === entryOId);
   if (!entry || !entry.loteItemId) return;
   const itemId = entry.loteItemId;
+  pendientesDescartados.add(itemId);
   entry.loteItemId = null;
   try { await fetch(`/api/lotes/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' }); }
   catch (e) { console.warn('No se pudo quitar la factura de pendientes:', e.message); }
 }
+
+// Si se fotografían facturas en el celular mientras Escanear está abierto
+// en el portátil, aparecen aquí solas (sin recargar) en unos segundos.
+setInterval(() => { if (!document.hidden) restaurarColaDesdeDB(); }, 15000);
+// ...y apenas se vuelve a esta pestaña (ej. del celular al portátil).
+document.addEventListener('visibilitychange', () => { if (!document.hidden) restaurarColaDesdeDB(); });
 
 // Lo que todavía no se ha leído no se puede recuperar: se avisa antes
 // de salir o recargar mientras haya capturas en espera o leyéndose.
@@ -1349,6 +1362,14 @@ function agregarCapturasACola(files){
       paquete: null,
     };
     colaCapturas.push(entry);
+    // Una foto de celular pesa 3-4 MB: se reduce antes de subirla (ver
+    // /comprimir-imagen.js) -- sube varias veces más rápido por datos
+    // móviles y la IA la lee igual de bien.
+    const comprimir = (typeof comprimirImagenSiHaceFalta === 'function' && !isPdf)
+      ? comprimirImagenSiHaceFalta(file) : Promise.resolve(file);
+    comprimir.then((archivo) => {
+    entry.tamano = archivo.size;
+    entry.mediaType = archivo.type || entry.mediaType;
     const reader = new FileReader();
     reader.onload = () => {
       entry.base64 = reader.result.split(',')[1];
@@ -1361,7 +1382,8 @@ function agregarCapturasACola(files){
       renderColaCapturas();
       motorCola();
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(archivo);
+    });
   });
   renderColaCapturas();
 }

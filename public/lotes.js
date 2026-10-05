@@ -147,7 +147,11 @@ async function dispararProcesamiento() {
         `UPDATE lotes_procesamiento SET estado = 'procesando', ultimo_turno = now(), updated_at = now() WHERE id = $1`,
         [item.lote_id]
       );
+      const inicio = Date.now();
       await procesarUnItem(item, item.lote_contador_id);
+      // Tiempos en los registros de Render (buscar "[tiempo]"): cuánto
+      // esperó el archivo en la fila y cuánto tardó la lectura.
+      console.log(`[tiempo] carga masiva: ${(String(item.base64 || '').length / 1e6).toFixed(1)} MB, esperó ${((inicio - new Date(item.created_at).getTime()) / 1000).toFixed(0)} s en la fila, lectura ${((Date.now() - inicio) / 1000).toFixed(1)} s`);
       await pool.query(
         `UPDATE lotes_procesamiento SET items_procesados = items_procesados + 1, updated_at = now() WHERE id = $1`,
         [item.lote_id]
