@@ -13,6 +13,7 @@
 <script src="/puc-cliente.js"></script>
 <script src="/comprimir-imagen.js"></script>
 <script src="/motivo-sin-retencion.js"></script>
+<script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -348,6 +349,7 @@
   }
   .item-del-btn:hover{ border-color:var(--err); color:var(--err); }
   .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:var(--t-12); color:var(--ink-soft); }
+  .it-copiloto{ margin-top:3px; font-size:var(--t-12); color:var(--pet-600); }
   .item-iva-mv-todas{ cursor:pointer; text-transform:none; letter-spacing:0; font-weight:600; margin-top:4px; }
   .items-foot{
     display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -868,6 +870,27 @@ function ajustarItemsAlPucCliente(items, clienteId, textoFactura){
     it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${textoFactura || ''}`);
     it._pucCliente = clienteId;
   });
+}
+
+// Copiloto de cuentas (ver /copiloto-cuentas.js): si el cliente tiene plan
+// propio y el sistema no sabe a qué cuenta va esta factura (proveedor o
+// concepto nuevos), se pide una vez y se aplica a los ítems no elegidos a
+// mano; la cuenta de la factura sigue a la del primer ítem.
+async function consultarCopilotoEscanear(){
+  const clienteId = currentClienteId;
+  const puc = pucPersonalizadoPorCliente[clienteId];
+  if (!clienteId || !puc || puc.length === 0 || !currentInvoiceData || typeof pedirCopilotoCuentas !== 'function') return;
+  const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+  const nit = nitInput ? nitInput.value : (currentInvoiceData.nit_cc || '');
+  if (!necesitaCopiloto(clienteId, nit, currentItems)) return;
+  const itemsAlPedir = currentItems;
+  const respuesta = await pedirCopilotoCuentas(clienteId, { ...currentInvoiceData, nit_cc: nit, items: currentItems });
+  if (itemsAlPedir !== currentItems || clienteId !== currentClienteId) return; // ya se abrió otra factura
+  if (!aplicarCopilotoAItems(currentItems, respuesta, clienteId)) return;
+  const sel = document.getElementById('subcuentaGastoSelect');
+  const primera = currentItems[0] && currentItems[0].subcuenta_gasto;
+  if (sel && primera && [...sel.options].some((o) => o.value === primera)) { sel.value = primera; currentSubcuentaGasto = primera; }
+  renderItemsPanel();
 }
 
 // Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
@@ -3108,6 +3131,7 @@ function renderItemsPanel(){
   if (!panel || currentItems.length === 0) { if (panel) panel.innerHTML = ''; return; }
   ajustarItemsAlPucCliente(currentItems, currentClienteId,
     currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '');
+  consultarCopilotoEscanear();
 
   const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
   const fechaInput = ledger.querySelector('input[data-key="fecha_factura"]');
@@ -3174,7 +3198,8 @@ function renderItemsPanel(){
     // pide la cuenta escrita a mano en su lugar.
     const subcuentaFieldHtml = (opcionesSubcuenta.length === 0 && personalizadosItem.length === 0)
       ? `<input type="text" class="it-subcuenta" style="min-width:170px;" placeholder="Código y nombre de la cuenta" value="${escapeHtml(item.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
-      : `<select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>`;
+      : `<select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>` +
+        (item._copiloto && !item._subcuentaManual ? `<div class="it-copiloto">${escapeHtml(TEXTO_FUENTE_COPILOTO[item._copiloto] || '')}</div>` : '');
     const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
     // Selector de tarifa de retención para ESTE ítem puntual -- recomienda
     // la tarifa legal de su categoría (misma tabla que usa el estimado de

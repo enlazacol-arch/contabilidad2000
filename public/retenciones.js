@@ -940,7 +940,9 @@ function registrarSubcuentasAprendidas(mapa) {
 // subcuentas que se usaron con cada proveedor, con las descripciones de lo
 // que se causó en cada una. Clave "clienteId|NIT|categoria" y "NIT|categoria".
 let HISTORIAL_SUBCUENTAS = {};
-const RAICES_COMUNES_HISTORIAL = new Set(['PARA', 'CON', 'POR', 'LOS', 'LAS', 'DEL', 'UNID', 'COLO', 'TAMA', 'GRAN', 'PEQU']);
+// Palabras que no dicen qué se compró (preposiciones, colores, tamaños).
+const RAICES_COMUNES_HISTORIAL = new Set(['PARA', 'CON', 'POR', 'LOS', 'LAS', 'DEL', 'UNID', 'COLO', 'TAMA', 'GRAN', 'PEQU',
+  'BLAN', 'NEGR', 'ROJA', 'ROJO', 'VERD', 'AZUL', 'AMAR', 'GRIS', 'MEDI', 'NUEV', 'SERV', 'PAGO', 'MENS']);
 function raicesHistorial(texto) {
   return new Set(String(texto || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter((p) => p.length >= 4).map((p) => p.slice(0, 5))
@@ -975,7 +977,7 @@ function registrarHistorialSubcuentas(filas) {
 // parece al texto del ítem (palabras en común con lo que se causó antes
 // en cada cuenta; las palabras que aparecen en TODAS no distinguen nada).
 // '' si no hay varias cuentas o ninguna se parece.
-function subcuentaPorHistorial(lista, texto, minimoCuentas = 2) {
+function subcuentaPorHistorial(lista, texto, minimoCuentas = 2, minimoPalabras = 1) {
   if (!Array.isArray(lista) || lista.length < minimoCuentas || !texto) return '';
   const delTexto = raicesHistorial(texto);
   const enTodas = new Set([...lista[0].raices].filter((r) => lista.every((e) => e.raices.has(r))));
@@ -987,7 +989,7 @@ function subcuentaPorHistorial(lista, texto, minimoCuentas = 2) {
       mejor = e; mejorPuntaje = puntaje;
     }
   }
-  return mejorPuntaje > 0 ? mejor.subcuenta : '';
+  return mejorPuntaje >= minimoPalabras ? mejor.subcuenta : '';
 }
 
 // Con `clienteId`, primero lo aprendido con ESE cliente (clave
@@ -1023,13 +1025,22 @@ function subcuentaAprendida(nit, categoria, clienteId, texto) {
   if (porConcepto) return porConcepto;
   const delProveedor = (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
   if (delProveedor) return delProveedor;
-  // Con este proveedor siempre se usó la misma cuenta (contabilidad importada).
-  if (delProveedorLista.length === 1) return delProveedorLista[0].subcuenta;
+  // Con este proveedor siempre se usó la misma cuenta (contabilidad
+  // importada): esa, si hay historia suficiente (3+ veces) o el concepto se
+  // parece. Con poca historia y otro concepto (a la administradora solo se
+  // le había pagado un transporte; su cobro de administración no va ahí),
+  // mejor que decida el copiloto de cuentas.
+  if (delProveedorLista.length === 1) {
+    const unica = delProveedorLista[0];
+    const delTexto = raicesHistorial(texto);
+    if (unica.veces >= 3 || !texto || [...delTexto].some((r) => unica.raices.has(r))) return unica.subcuenta;
+  }
   // Proveedor nuevo para este cliente: lo que el cliente ya causó con un
-  // concepto parecido, de cualquier proveedor (basta una cuenta que se
-  // parezca al texto).
+  // concepto parecido, de cualquier proveedor -- con al menos 2 palabras
+  // en común (con una sola, "silla BLANCA" caía en "copia BLANCO y negro");
+  // si no alcanza, decide el copiloto de cuentas (/copiloto-cuentas.js).
   return clienteId
-    ? subcuentaPorHistorial(unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${cat}`], HISTORIAL_SUBCUENTAS[`${clienteId}|*|*`]), texto, 1)
+    ? subcuentaPorHistorial(unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${cat}`], HISTORIAL_SUBCUENTAS[`${clienteId}|*|*`]), texto, 1, 2)
     : '';
 }
 

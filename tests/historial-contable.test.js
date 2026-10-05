@@ -20,7 +20,7 @@ const AUXILIAR = [
   fila('51-95-30-01', '901.000.111-0', 'INSUMOS EJEMPLO S.A.S.', '0004', '000035', 'MARCADORES, CINTA', 130000, 0),
   fila('51-35-95-02', '901.222.333-4', 'FACTURACION EJEMPLO SAS', '0005', '000041', 'SERVICIO FACTURACION', 844626, 0),
   fila('23-65-25-02', '901.222.333-4', 'FACTURACION EJEMPLO SAS', '0006', '000041', 'SERVICIO FACTURACION', 0, 28391),
-  fila('51-45-10-11', '1.055.917.398-3', 'PERSONA BOMBILLOS', '0007', '000038', 'BOMBILLO GU10', 12000, 0),
+  fila('51-45-10-11', '1.055.917.398-3', 'PERSONA BOMBILLOS', '0007', '000038', 'BOMBILLO AHORRADOR GU10', 12000, 0),
 ];
 
 test('movimientosDesdeTabla: Auxiliar General (ignora las filas de resumen por cuenta)', () => {
@@ -75,8 +75,10 @@ test('lo importado alimenta la cuenta sugerida desde la primera factura', () => 
   assert.equal(R.subcuentaAprendida('900111222', 'vigilancia_aseo', 'C1', 'Servicio de vigilancia agosto'), '513507');
   // Proveedor conocido con varias cuentas: por concepto.
   assert.equal(R.subcuentaAprendida('901000111', 'compras', 'C1', 'MARCADOR BORRABLE'), '51953001');
-  // Proveedor NUEVO: lo que el cliente ya causó con algo parecido.
-  assert.equal(R.subcuentaAprendida('800000001', 'compras', 'C1', 'BOMBILLO LED 9W'), '51451011');
+  // Proveedor NUEVO: lo que el cliente ya causó con algo parecido (2+ palabras en común).
+  assert.equal(R.subcuentaAprendida('800000001', 'compras', 'C1', 'BOMBILLO AHORRADOR LED 9W'), '51451011');
+  // Una sola palabra en común con otro proveedor no basta: decide el copiloto.
+  assert.equal(R.subcuentaAprendida('800000001', 'compras', 'C1', 'SILLA PLASTICA BLANCA'), '');
   R.registrarHistorialSubcuentas([]);
 });
 

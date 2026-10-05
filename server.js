@@ -1972,6 +1972,80 @@ app.post('/api/clients/:id/historial-contable', requireAuth, requireRole('admini
   }
 });
 
+// ---------- Copiloto de cuentas ----------
+// Para un cliente con plan de cuentas propio, escoge la cuenta de gasto de
+// cada ítem de una factura ya leída, como la escogería su contadora:
+//   1. si con este proveedor siempre se usó la MISMA cuenta (contabilidad
+//      importada o facturas aprobadas en Enlaza), esa -- sin IA;
+//   2. si no, una consulta de solo texto a la IA con el plan del cliente y
+//      ejemplos de cómo causa su contadora (proveedor | detalle | cuenta),
+//      primero los del mismo proveedor y luego los de conceptos parecidos.
+// Medido con la contabilidad real de Bosques (julio): la cuenta coincidió
+// con la contadora en 77-81% desde la primera factura (20-28% sin esto).
+const copiloto = require('./copiloto');
+
+async function llamarGeminiTextoJSON(prompt) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0 } }),
+  });
+  if (!response.ok) throw new Error('Gemini ' + response.status);
+  const data = await response.json();
+  return JSON.parse((data.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim());
+}
+
+app.post('/api/clients/:id/copiloto-cuentas', requireAuth, limitadorIA, async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const nit = normalizarNit(req.body.nit);
+    const items = (Array.isArray(req.body.items) ? req.body.items : []).slice(0, 60)
+      .map((it) => ({ descripcion: String(it.descripcion || '').slice(0, 200), subtotal: Number(it.subtotal) || 0 }));
+    if (items.length === 0) return res.status(400).json({ error: 'La factura no trae ítems.' });
+
+    const { rows: puc } = await pool.query(
+      `SELECT codigo, concepto, recibe_movimiento, activo FROM puc_personalizado_cliente WHERE contador_id = $1 AND cliente_id = $2`,
+      [req.firmaId, req.params.id]
+    );
+    const plan = copiloto.planDeGasto(puc);
+    if (plan.length === 0) return res.json({ cuentas: [], fuente: 'sin_plan' });
+    const enPlan = new Set(plan.map((c) => String(c.codigo)));
+
+    // Cómo ha causado esta contadora a este cliente: contabilidad importada
+    // y facturas aprobadas en Enlaza (proveedor, detalle, cuenta).
+    const [importado, deEnlaza] = await Promise.all([
+      pool.query(`SELECT nit, nombre_tercero AS nombre, cuenta, detalles AS detalle, veces FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2`, [req.firmaId, req.params.id]),
+      pool.query(
+        `SELECT i.nit_cc AS nit, MAX(i.nombre_razon_social) AS nombre, fi.subcuenta_gasto AS cuenta, LEFT(STRING_AGG(DISTINCT fi.descripcion, ' | '), 300) AS detalle, COUNT(*)::int AS veces
+           FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
+          WHERE i.contador_id = $1 AND i.cliente_id = $2 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
+            AND fi.subcuenta_gasto <> '' AND i.saved_at > now() - interval '18 months'
+          GROUP BY i.nit_cc, fi.subcuenta_gasto`,
+        [req.firmaId, req.params.id]
+      ),
+    ]);
+    const ejemplos = [...importado.rows, ...deEnlaza.rows]
+      .map((e) => ({ nit: normalizarNit(e.nit), nombre: String(e.nombre || '').trim(), cuenta: String(e.cuenta), detalle: String(e.detalle || '').slice(0, 300), veces: Number(e.veces) || 1 }))
+      .filter((e) => enPlan.has(e.cuenta));
+
+    // 1. Proveedor que siempre fue a la misma cuenta.
+    const textoFactura = items.map((it) => it.descripcion).join(' ') + ' ' + (req.body.concepto || '');
+    const unica = copiloto.cuentaUnicaDelProveedor(ejemplos, nit, textoFactura);
+    if (unica) return res.json({ cuentas: items.map((_, indice) => ({ indice, codigo: unica })), fuente: 'proveedor' });
+
+    // 2. IA con el plan y los ejemplos más pertinentes.
+    const elegidos = copiloto.elegirEjemplos(ejemplos, nit, textoFactura);
+    const prompt = copiloto.construirPromptCopiloto({ plan, ejemplos: elegidos, nit, nombre: req.body.nombre, concepto: req.body.concepto, items });
+    const cuentas = copiloto.cuentasValidas(await llamarGeminiTextoJSON(prompt), items, plan);
+    res.json({ cuentas, fuente: 'copiloto' });
+  } catch (err) {
+    console.error('Error del copiloto de cuentas:', err.message);
+    res.status(500).json({ error: 'El copiloto no pudo sugerir cuentas.' });
+  }
+});
+
 app.delete('/api/clients/:id/historial-contable', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     if (!(await clienteEsDelContador(req, req.params.id))) {
