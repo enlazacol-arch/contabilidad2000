@@ -1778,10 +1778,15 @@ async function subirLote(files){
 // necesite refrescar de inmediato (reintentar, eliminar).
 async function refrescarLoteActivo(){
   try {
-    const res = await fetch('/api/lotes/activo');
+    // Solo lo que ESTE usuario subió para ESTE cliente (o sin cliente fijo).
+    const res = await fetch('/api/lotes/activo' + (clientePreseleccionado ? '?cliente=' + encodeURIComponent(clientePreseleccionado.id) : ''));
     if (!res.ok) return;
     const data = await res.json();
-    if (!data) return;
+    if (!data) {
+      // Nada pendiente para este cliente: no hay nada que seguir consultando.
+      if (pollingHandle) { clearInterval(pollingHandle); pollingHandle = null; }
+      return;
+    }
 
     loteId = data.id;
     lote = mapearItemsServidor(data.items || []);

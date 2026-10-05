@@ -4797,7 +4797,7 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'Debes escoger uno de tus clientes asignados para cargar documentos.' });
   }
   try {
-    const loteId = await lotes.crearLote(req.firmaId, clienteId || null, archivos);
+    const loteId = await lotes.crearLote(req.firmaId, clienteId || null, archivos, req.userId);
     res.status(201).json({ loteId });
   } catch (err) {
     console.error('Error creando lote:', err);
@@ -4805,22 +4805,61 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
   }
 });
 
-// El lote en curso (o el último completado, si no hay ninguno
-// procesándose ahora) de este contador -- lo usa tanto el avisito
-// global (en cualquier página) como Carga masiva para reconectarse.
+// Lo pendiente de revisar en Carga masiva para ESTE usuario y ESTE
+// cliente (?cliente=ID; sin parámetro, lo que subió sin cliente fijo).
+// Así, si dos contadoras de la misma firma cargan facturas de clientes
+// distintos al mismo tiempo, cada una ve solo su propio lote dentro del
+// cliente en el que lo subió (ver bandejaPendiente en public/lotes.js).
 app.get('/api/lotes/activo', requireAuth, async (req, res) => {
   try {
-    const lote = await lotes.obtenerLoteActivoOUltimo(req.firmaId);
-    // Un miembro restringido no debe ver el lote de otro cliente (ni uno
-    // sin cliente fijo, que puede traer documentos de cualquier cliente
-    // de la firma) -- para él, simplemente no hay lote activo.
-    if (lote && !puedeAccederCliente(req, lote.cliente_id)) {
-      return res.json(null);
-    }
-    res.json(lote || null);
+    const clienteId = req.query.cliente ? String(req.query.cliente) : null;
+    // Un miembro restringido solo ve lotes de sus clientes asignados (un
+    // lote sin cliente fijo puede traer documentos de cualquier cliente).
+    if (!puedeAccederCliente(req, clienteId)) return res.json(null);
+    const bandeja = await lotes.bandejaPendiente(req.firmaId, req.userId, clienteId);
+    res.json(bandeja || null);
   } catch (err) {
     console.error('Error leyendo el lote activo:', err);
     res.status(500).json({ error: 'No se pudo consultar el estado del procesamiento.' });
+  }
+});
+
+// Escanear guarda aquí cada factura apenas se lee (imagen + lectura),
+// como pendiente de este usuario y este cliente, para que no se pierda
+// al recargar la página o al seguir revisando desde otro aparato.
+app.post('/api/lotes/escaner', requireAuth, async (req, res) => {
+  try {
+    const { clienteId, nombre, base64, mediaType, isPdf, data } = req.body || {};
+    if (!base64 || !data || typeof data !== 'object') {
+      return res.status(400).json({ error: 'Falta la imagen o la lectura de la factura.' });
+    }
+    if (!puedeAccederCliente(req, clienteId || null)) {
+      return res.status(403).json({ error: 'Debes escoger uno de tus clientes asignados.' });
+    }
+    if (clienteId && !(await clienteEsDelContador(req, clienteId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const itemId = await lotes.guardarLecturaEscaner(
+      req.firmaId, req.userId, clienteId || null,
+      { nombre: String(nombre || '').slice(0, 200), base64: String(base64), mediaType: String(mediaType || ''), isPdf: !!isPdf },
+      data
+    );
+    res.status(201).json({ itemId });
+  } catch (err) {
+    console.error('Error guardando la lectura de Escanear:', err);
+    res.status(500).json({ error: 'No se pudo guardar la lectura como pendiente.' });
+  }
+});
+
+// Los lotes de este usuario (en curso y terminados hoy), con su cliente
+// -- para el aviso flotante de lote-aviso.js en todas las páginas.
+app.get('/api/lotes/mios', requireAuth, async (req, res) => {
+  try {
+    const lista = await lotes.lotesDelUsuario(req.firmaId, req.userId);
+    res.json(lista.filter((l) => puedeAccederCliente(req, l.cliente_id)));
+  } catch (err) {
+    console.error('Error leyendo los lotes del usuario:', err);
+    res.status(500).json({ error: 'No se pudieron consultar tus lotes.' });
   }
 });
 

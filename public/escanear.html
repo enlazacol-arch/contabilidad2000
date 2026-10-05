@@ -1208,14 +1208,12 @@ function detectClient(data){
 // formulario de revisar/guardar de siempre -- esto solo evita que
 // capturar la próxima tenga que esperar a que la anterior se lea.
 //
-// Vive SOLO en la memoria de esta pestaña (un array de JS), nunca en
-// el servidor ni en un almacenamiento del navegador que sobreviva a la
-// pestaña -- así que mientras el contador se queda en esta página
-// (revisando una captura, tomando otra, etc.) la lista sigue ahí, pero
-// en cuanto sale de esta pantalla o cierra la pestaña, desaparece por
-// completo. Esto es a propósito: son facturas reales de un cliente, y
-// nunca deben poder quedar visibles para otro usuario que abra esta
-// misma página después en el mismo navegador.
+// La lista vive en la memoria de esta pestaña, pero cada factura YA
+// LEÍDA se guarda también en el servidor como pendiente del usuario y
+// del cliente (ver restaurarColaDesdeDB/guardarCapturaEnDB más abajo),
+// para que no se pierda al recargar ni al cambiar de aparato. Nunca se
+// guarda en el navegador: son facturas reales de un cliente, y no deben
+// quedar visibles para otro usuario que use después el mismo equipo.
 //
 // (Antes se guardaba en IndexedDB para sobrevivir a un refresh -- se
 // quitó porque esa persistencia sobrevivía también el cambio de sesión
@@ -1239,17 +1237,98 @@ try {
 } catch (e) { /* navegador sin IndexedDB -- no había nada que purgar */ }
 try { localStorage.removeItem('escanearCapturaAbiertaId'); } catch (e) {}
 
-async function restaurarColaDesdeDB(){
-  // Ya no se restaura nada -- cada carga de esta página empieza con la
-  // cola vacía (ver comentario de arriba). Se deja esta función (sin
-  // cuerpo real) para no tener que tocar el punto donde se llama.
+// ---- Lecturas pendientes guardadas en el servidor ----
+// Mafe fotografió facturas en el celular, se leyeron bien, y al abrir
+// Escanear en el portátil ya no estaban (y al recargar se perdieron):
+// la cola solo vivía en la memoria de la pestaña. Ahora cada factura,
+// apenas se LEE, se guarda en el servidor como pendiente de ESTE
+// usuario y ESTE cliente (POST /api/lotes/escaner) -- no en el
+// navegador, así que otro usuario que use el mismo equipo no la ve.
+// Al abrir Escanear (en cualquier aparato) se recuperan; al guardarla
+// en el kárdex o quitarla de la lista, se borra del servidor. También
+// aparecen en Carga masiva de ese cliente.
+function urlBandejaEscaner(){
+  return '/api/lotes/activo' + (clientePreseleccionado ? '?cliente=' + encodeURIComponent(clientePreseleccionado.id) : '');
 }
 
-// Ya no se persiste nada de la cola fuera de esta pestaña (ver
-// comentario de más arriba) -- se dejan estas dos funciones sin cuerpo
-// para no tener que tocar cada uno de los puntos donde se llamaban.
-async function guardarCapturaEnDB(entry){}
-async function eliminarCapturaDeDB(id){}
+async function restaurarColaDesdeDB(){
+  try {
+    const res = await fetch(urlBandejaEscaner());
+    if (!res.ok) return;
+    const bandeja = await res.json();
+    const items = (bandeja && Array.isArray(bandeja.items) ? bandeja.items : [])
+      .filter((it) => it.origen === 'escaner' && (it.estado === 'listo' || it.estado === 'revisar'));
+    for (const it of items) {
+      if (colaCapturas.some((c) => c.loteItemId === it.id)) continue;
+      let data = null;
+      try { data = typeof it.data === 'string' ? JSON.parse(it.data) : it.data; } catch (e) { continue; }
+      const resArchivo = await fetch(`/api/lotes/items/${encodeURIComponent(it.id)}/archivo`);
+      if (!resArchivo.ok) continue;
+      const archivo = await resArchivo.json();
+      colaCapturas.push({
+        id: siguienteCapturaId++,
+        nombre: it.nombre_archivo || 'factura',
+        tamano: Math.round(String(archivo.base64 || '').length * 0.75),
+        isPdf: !!it.es_pdf,
+        base64: archivo.base64,
+        mediaType: it.media_type || (it.es_pdf ? 'application/pdf' : 'image/jpeg'),
+        estado: 'lista',
+        data,
+        errorMsg: '',
+        fileHash: (data && data.file_hash) || '',
+        paquete: null,
+        loteItemId: it.id,
+      });
+    }
+    if (items.length > 0) {
+      renderColaCapturas();
+      if (capturaAbiertaId === null && colaCapturas[0]) abrirCaptura(colaCapturas[0].id);
+    }
+  } catch (e) {
+    console.warn('No se pudieron recuperar las facturas pendientes de Escanear:', e.message);
+  }
+}
+
+// Se llama cada vez que cambia una captura: si ya quedó leída y aún no
+// está en el servidor, se guarda allá como pendiente.
+async function guardarCapturaEnDB(entry){
+  if (!entry || entry.estado !== 'lista' || !entry.data || entry.loteItemId || entry._guardandoPendiente) return;
+  entry._guardandoPendiente = true;
+  try {
+    const res = await fetch('/api/lotes/escaner', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clienteId: clientePreseleccionado ? clientePreseleccionado.id : null,
+        nombre: entry.nombre, base64: entry.base64, mediaType: entry.mediaType, isPdf: entry.isPdf,
+        data: entry.data,
+      }),
+    });
+    if (res.ok) entry.loteItemId = (await res.json()).itemId;
+  } catch (e) {
+    console.warn('No se pudo guardar la factura leída como pendiente:', e.message);
+  } finally {
+    entry._guardandoPendiente = false;
+  }
+}
+
+// Al guardarla en el kárdex o quitarla de la lista, deja de estar pendiente.
+async function eliminarCapturaDeDB(entryOId){
+  const entry = typeof entryOId === 'object' ? entryOId : colaCapturas.find((c) => c.id === entryOId);
+  if (!entry || !entry.loteItemId) return;
+  const itemId = entry.loteItemId;
+  entry.loteItemId = null;
+  try { await fetch(`/api/lotes/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' }); }
+  catch (e) { console.warn('No se pudo quitar la factura de pendientes:', e.message); }
+}
+
+// Lo que todavía no se ha leído no se puede recuperar: se avisa antes
+// de salir o recargar mientras haya capturas en espera o leyéndose.
+window.addEventListener('beforeunload', (e) => {
+  if (colaCapturas.some((c) => c.estado === 'pendiente' || c.estado === 'leyendo')) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 function agregarCapturasACola(files){
   const lista = Array.from(files || []);
@@ -1303,7 +1382,7 @@ function renderColaCapturas(){
   }
   colaInfoEl.classList.add('show');
   colaInfoEl.innerHTML = `
-    <div class="ci-titulo">📥 ${colaCapturas.length} captura${colaCapturas.length === 1 ? '' : 's'} en esta sesión</div>
+    <div class="ci-titulo">📥 ${colaCapturas.length} factura${colaCapturas.length === 1 ? '' : 's'} en tu lista · las leídas quedan guardadas hasta que las guardes o las quites</div>
     ${colaCapturas.map((c) => `
       <div class="captura-item ${c.id === capturaAbiertaId ? 'is-open' : ''}" data-id="${c.id}">
         <span class="ci-nombre">${escapeHtml(c.nombre)}</span>
@@ -1327,8 +1406,9 @@ function renderColaCapturas(){
 }
 
 function quitarCaptura(id){
+  const quitada = colaCapturas.find((c) => c.id === id);
   colaCapturas = colaCapturas.filter((c) => c.id !== id);
-  eliminarCapturaDeDB(id);
+  eliminarCapturaDeDB(quitada);
   if (capturaAbiertaId === id) {
     capturaAbiertaId = null;
     previewWrap.classList.remove('show');
@@ -1377,6 +1457,9 @@ async function motorCola(){
 function reintentarCapturaAbierta(forzar){
   const entry = colaCapturas.find((c) => c.id === capturaAbiertaId);
   if (!entry) return;
+  // La lectura vieja guardada como pendiente se descarta: al terminar de
+  // releer, se guarda la nueva (ver guardarCapturaEnDB).
+  eliminarCapturaDeDB(entry);
   entry.estado = 'pendiente';
   entry.__forzar = forzar;
   guardarCapturaEnDB(entry);
@@ -3445,7 +3528,7 @@ async function guardarFactura(forzar){
       entryGuardada.estado = 'guardada';
       // Ya quedó en el kárdex -- no hace falta seguir guardándola en el
       // almacenamiento local, así no se vuelve a traer en una próxima visita.
-      eliminarCapturaDeDB(entryGuardada.id);
+      eliminarCapturaDeDB(entryGuardada);
     }
     renderColaCapturas();
 
