@@ -300,3 +300,22 @@ test('asiento sin plan del cliente: igual que antes (2408 y 236525)', () => {
   assert.equal(lineaDe(r, '236525').credito, 40000);
   assert.equal(lineaDe(r, '236525').cuenta_cliente, false);
 });
+
+test('asiento: los ítems suman unos pesos distinto al subtotal (redondeo) -> se ajusta y cuadra', () => {
+  // GAMOEZ 39710 (factura real de Bosques): 13 ítems suman $619.538, subtotal $619.534.
+  const r = generarAsientoEgreso(
+    { tipo_movimiento: 'egreso', categoria_concepto: 'compras', valor_sin_iva: '619534', valor_iva: '117712', valor_con_iva: '737246', rete_fuente: '0' },
+    [{ categoria_concepto: 'compras', subcuenta_gasto: '519525', subtotal: '400000' }, { categoria_concepto: 'compras', subcuenta_gasto: '519530', subtotal: '219538' }]
+  );
+  assert.equal(r.error, undefined);
+  assert.equal(lineaDe(r, '519525').debito, 399996);
+  assert.equal(r.debe, r.haber);
+});
+
+test('asiento: una diferencia grande entre ítems y subtotal sigue sin proponerse', () => {
+  const r = generarAsientoEgreso(
+    { tipo_movimiento: 'egreso', categoria_concepto: 'compras', valor_sin_iva: '619534', valor_iva: '117712', valor_con_iva: '737246', rete_fuente: '0' },
+    [{ categoria_concepto: 'compras', subcuenta_gasto: '519525', subtotal: '500000' }]
+  );
+  assert.equal(r.error, 'asiento_no_cuadra');
+});
