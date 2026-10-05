@@ -21,6 +21,8 @@ const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
 // PUC propio de cada cliente (niveles, cuentas obsoletas, cuenta por tarifa)
 const pucCliente = require('./public/puc-cliente');
+// Contabilidad anterior del cliente (Auxiliar General / Listado de movimientos)
+const historialContable = require('./public/historial-contable');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -459,6 +461,33 @@ async function ensureSchema() {
   // Ver calcularRetencionCategoriaLinea() en retenciones.js, que es
   // donde esta marca deja de sugerir la tarifa fija.
   await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS aplica_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
+  // "A este proveedor no se le retiene": aprendido de la contabilidad
+  // anterior del cliente (documentos sobre la base sin retención) o
+  // marcado a mano. Como autorretenedor, deja de proponer retención.
+  await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS no_retener BOOLEAN NOT NULL DEFAULT false;`);
+  // Lo aprendido de la contabilidad anterior de cada cliente (ver
+  // public/historial-contable.js): por proveedor, cada cuenta de gasto que
+  // se le usó, con los detalles de los movimientos. Alimenta el historial
+  // de cuentas (/api/subcuentas-historial), el copiloto de cuentas y la
+  // corrección del NIT por nombre.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS historial_contable_cliente (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      cliente_id UUID NOT NULL,
+      nit TEXT NOT NULL,
+      nombre_tercero TEXT NOT NULL DEFAULT '',
+      nombre_normalizado TEXT NOT NULL DEFAULT '',
+      cuenta TEXT NOT NULL,
+      detalles TEXT NOT NULL DEFAULT '',
+      veces INTEGER NOT NULL DEFAULT 1,
+      valor NUMERIC NOT NULL DEFAULT 0,
+      importado_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_historial_contable_cliente ON historial_contable_cliente (contador_id, cliente_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_historial_contable_nombre ON historial_contable_cliente (contador_id, nombre_normalizado);`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS historial_contable_resumen TEXT DEFAULT '';`);
 
   // PUC personalizado por cliente -- algunos contadores llevan la
   // contabilidad de un cliente puntual en OTRO sistema (ej. Contaia) que
@@ -506,6 +535,11 @@ async function ensureSchema() {
   // actividad gravada): el IVA de sus compras no es descontable, es más
   // valor del gasto -- el asiento lo lleva al gasto y no a la 2408.
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_mayor_valor_gasto BOOLEAN DEFAULT false;`);
+  // Cómo se lleva ese IVA al gasto (ver generarAsientoEgreso): en la cuenta
+  // "IVA ..." del plan del cliente (true) o en la misma cuenta del gasto
+  // (false, por defecto); y si se controla en cuentas de orden 8395/8695.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_gasto_en_cuenta_iva BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS iva_cuentas_orden BOOLEAN DEFAULT false;`);
 
   // CREATE TABLE IF NOT EXISTS no agrega columnas nuevas a una tabla que
   // ya existía de antes -- por eso `declarante_renta` (agregado después
@@ -1542,6 +1576,8 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
     // cuentas "IVA ..." al gasto). Sin plan propio, el PUC estándar.
     let pucDelCliente = [];
     let ivaMayorValorGasto = false;
+    let ivaEnCuentaIva = false;
+    let ivaCuentasOrden = false;
     if (invoiceRow.cliente_id) {
       const [pucRes, cliRes] = await Promise.all([
         pool.query(
@@ -1549,12 +1585,15 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
            WHERE contador_id = $1 AND cliente_id = $2`,
           [contadorId, invoiceRow.cliente_id]
         ),
-        pool.query('SELECT iva_mayor_valor_gasto FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
+        pool.query('SELECT iva_mayor_valor_gasto, iva_gasto_en_cuenta_iva, iva_cuentas_orden FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
       ]);
       pucDelCliente = pucRes.rows.map((r) => ({ ...r, porcentaje: r.porcentaje === null ? null : Number(r.porcentaje) }));
-      ivaMayorValorGasto = !!(cliRes.rows[0] && cliRes.rows[0].iva_mayor_valor_gasto);
+      const cli = cliRes.rows[0] || {};
+      ivaMayorValorGasto = !!cli.iva_mayor_valor_gasto;
+      ivaEnCuentaIva = !!cli.iva_gasto_en_cuenta_iva;
+      ivaCuentasOrden = !!cli.iva_cuentas_orden;
     }
-    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto });
+    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto, ivaEnCuentaIva, ivaCuentasOrden });
     if (resultado.error) {
       // No es un error del guardado de la factura -- solo significa que
       // todavía no hay suficiente información (o que es una factura de
@@ -1768,7 +1807,7 @@ const CLIENT_EDITABLE_FIELDS = [
   // contador los marca a mano, así que sí se aceptan directo del cliente.
   'agente_retenedor_ica', 'agente_retenedor_iva',
   // No responsable de IVA: el IVA de sus compras va al gasto (ver asientos.js)
-  'iva_mayor_valor_gasto',
+  'iva_mayor_valor_gasto', 'iva_gasto_en_cuenta_iva', 'iva_cuentas_orden',
 ];
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
@@ -1791,8 +1830,8 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     if (updates.agente_retenedor_iva !== undefined) {
       updates.agente_retenedor_iva = !!updates.agente_retenedor_iva;
     }
-    if (updates.iva_mayor_valor_gasto !== undefined) {
-      updates.iva_mayor_valor_gasto = !!updates.iva_mayor_valor_gasto;
+    for (const campo of ['iva_mayor_valor_gasto', 'iva_gasto_en_cuenta_iva', 'iva_cuentas_orden']) {
+      if (updates[campo] !== undefined) updates[campo] = !!updates[campo];
     }
 
     const keys = Object.keys(updates);
@@ -1849,6 +1888,177 @@ function filaPucParaNavegador(r) {
   };
 }
 const PUC_CAMPOS_SELECT = `id, categoria_concepto, codigo, concepto, recibe_movimiento, activo, porcentaje, tipo_cuenta, origen, editado`;
+
+// ---------- Contabilidad anterior del cliente ----------
+// La contadora sube el Auxiliar General (o el Listado de Movimiento por
+// Comprobante) que exporta su programa contable; el navegador lo lee
+// (Excel/CSV) y manda las filas. Enlaza aprende de ahí (ver
+// public/historial-contable.js) y lo deja listo desde la primera factura:
+//   - cuentas por proveedor y detalle -> historial_contable_cliente;
+//   - proveedores con documentos sobre la base y nunca retención ->
+//     terceros_fiscales.no_retener (sin tocar sus otras marcas);
+//   - tarifa de retención habitual (por la cuenta 2365 usada) ->
+//     tarifa_proveedor_aprendida, sin pisar una ya aprendida;
+//   - si el IVA al gasto se controla en cuentas de orden -> se informa
+//     para activarlo en la ficha del cliente.
+// Una importación nueva reemplaza la anterior de ese cliente.
+app.post('/api/clients/:id/historial-contable', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const filas = Array.isArray(req.body.filas) ? req.body.filas : [];
+    if (filas.length < 2) return res.status(400).json({ error: 'El archivo no trae movimientos.' });
+    const { movimientos, formato, error } = historialContable.movimientosDesdeTabla(filas);
+    if (error) return res.status(400).json({ error });
+    if (movimientos.length === 0) return res.status(400).json({ error: 'No se encontraron movimientos en el archivo.' });
+
+    const { rows: puc } = await pool.query(
+      'SELECT codigo, porcentaje FROM puc_personalizado_cliente WHERE contador_id = $1 AND cliente_id = $2',
+      [req.firmaId, req.params.id]
+    );
+    const k = historialContable.conocimientoDesdeMovimientos(movimientos, puc.map((c) => ({ codigo: c.codigo, porcentaje: c.porcentaje === null ? null : Number(c.porcentaje) })));
+
+    await pool.query('DELETE FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2', [req.firmaId, req.params.id]);
+    const cuentas = k.cuentas;
+    for (let i = 0; i < cuentas.length; i += 400) {
+      const b = cuentas.slice(i, i + 400);
+      await pool.query(
+        `INSERT INTO historial_contable_cliente (id, contador_id, cliente_id, nit, nombre_tercero, nombre_normalizado, cuenta, detalles, veces, valor)
+         SELECT u.id, $2, $3, u.nit, u.nombre, u.normalizado, u.cuenta, u.detalles, u.veces, u.valor
+         FROM unnest($1::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::int[], $10::numeric[])
+           AS u(id, nit, nombre, normalizado, cuenta, detalles, veces, valor)`,
+        [b.map(() => crypto.randomUUID()), req.firmaId, req.params.id,
+          b.map((c) => c.nit), b.map((c) => k.terceros[c.nit] || ''), b.map((c) => historialContable.normalizarNombreTercero(k.terceros[c.nit] || '')),
+          b.map((c) => c.cuenta), b.map((c) => c.detalles.join(' | ').slice(0, 2000)), b.map((c) => c.veces), b.map((c) => Math.round(c.valor))]
+      );
+    }
+
+    const noRetiene = k.retencion.filter((r) => r.noRetiene);
+    for (const r of noRetiene) {
+      await pool.query(
+        `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, no_retener, notas)
+         VALUES ($1, $2, $3, $4, true, 'Sin retención en la contabilidad anterior del cliente.')
+         ON CONFLICT (contador_id, nit) DO UPDATE SET no_retener = true,
+           nombre = COALESCE(NULLIF(terceros_fiscales.nombre, ''), EXCLUDED.nombre), updated_at = now()`,
+        [crypto.randomUUID(), req.firmaId, r.nit, k.terceros[r.nit] || '']
+      );
+    }
+    const conTarifa = k.retencion.filter((r) => r.conRetencion > 0 && r.tarifa && r.categoria);
+    for (const r of conTarifa) {
+      await pool.query(
+        `INSERT INTO tarifa_proveedor_aprendida (id, contador_id, nit_proveedor, categoria, tarifa, veces_confirmado)
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (contador_id, nit_proveedor, categoria) DO NOTHING`,
+        [crypto.randomUUID(), req.firmaId, r.nit, r.categoria, r.tarifa, r.conRetencion]
+      );
+    }
+
+    const resumen = {
+      importado_at: new Date().toISOString(),
+      archivo: String(req.body.nombreArchivo || '').slice(0, 200),
+      formato,
+      movimientos: movimientos.length,
+      proveedores: new Set(cuentas.map((c) => c.nit)).size,
+      cuentas: cuentas.length,
+      no_retener: noRetiene.map((r) => k.terceros[r.nit] || r.nit),
+      con_retencion: conTarifa.map((r) => ({ nombre: k.terceros[r.nit] || r.nit, tarifa: r.tarifa, cuenta: r.cuentaRetencion })),
+      iva_cuentas_orden: k.ivaCuentasOrden,
+    };
+    await pool.query('UPDATE clients SET historial_contable_resumen = $1 WHERE id = $2 AND contador_id = $3', [JSON.stringify(resumen), req.params.id, req.firmaId]);
+    res.json(resumen);
+  } catch (err) {
+    console.error('Error importando la contabilidad anterior del cliente:', err);
+    res.status(500).json({ error: 'No se pudo importar el archivo.' });
+  }
+});
+
+// ---------- Copiloto de cuentas ----------
+// Para un cliente con plan de cuentas propio, escoge la cuenta de gasto de
+// cada ítem de una factura ya leída, como la escogería su contadora:
+//   1. si con este proveedor siempre se usó la MISMA cuenta (contabilidad
+//      importada o facturas aprobadas en Enlaza), esa -- sin IA;
+//   2. si no, una consulta de solo texto a la IA con el plan del cliente y
+//      ejemplos de cómo causa su contadora (proveedor | detalle | cuenta),
+//      primero los del mismo proveedor y luego los de conceptos parecidos.
+// Medido con la contabilidad real de Bosques (julio): la cuenta coincidió
+// con la contadora en 77-81% desde la primera factura (20-28% sin esto).
+const copiloto = require('./copiloto');
+
+async function llamarGeminiTextoJSON(prompt) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0 } }),
+  });
+  if (!response.ok) throw new Error('Gemini ' + response.status);
+  const data = await response.json();
+  return JSON.parse((data.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim());
+}
+
+app.post('/api/clients/:id/copiloto-cuentas', requireAuth, limitadorIA, async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    const nit = normalizarNit(req.body.nit);
+    const items = (Array.isArray(req.body.items) ? req.body.items : []).slice(0, 60)
+      .map((it) => ({ descripcion: String(it.descripcion || '').slice(0, 200), subtotal: Number(it.subtotal) || 0 }));
+    if (items.length === 0) return res.status(400).json({ error: 'La factura no trae ítems.' });
+
+    const { rows: puc } = await pool.query(
+      `SELECT codigo, concepto, recibe_movimiento, activo FROM puc_personalizado_cliente WHERE contador_id = $1 AND cliente_id = $2`,
+      [req.firmaId, req.params.id]
+    );
+    const plan = copiloto.planDeGasto(puc);
+    if (plan.length === 0) return res.json({ cuentas: [], fuente: 'sin_plan' });
+    const enPlan = new Set(plan.map((c) => String(c.codigo)));
+
+    // Cómo ha causado esta contadora a este cliente: contabilidad importada
+    // y facturas aprobadas en Enlaza (proveedor, detalle, cuenta).
+    const [importado, deEnlaza] = await Promise.all([
+      pool.query(`SELECT nit, nombre_tercero AS nombre, cuenta, detalles AS detalle, veces FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2`, [req.firmaId, req.params.id]),
+      pool.query(
+        `SELECT i.nit_cc AS nit, MAX(i.nombre_razon_social) AS nombre, fi.subcuenta_gasto AS cuenta, LEFT(STRING_AGG(DISTINCT fi.descripcion, ' | '), 300) AS detalle, COUNT(*)::int AS veces
+           FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
+          WHERE i.contador_id = $1 AND i.cliente_id = $2 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
+            AND fi.subcuenta_gasto <> '' AND i.saved_at > now() - interval '18 months'
+          GROUP BY i.nit_cc, fi.subcuenta_gasto`,
+        [req.firmaId, req.params.id]
+      ),
+    ]);
+    const ejemplos = [...importado.rows, ...deEnlaza.rows]
+      .map((e) => ({ nit: normalizarNit(e.nit), nombre: String(e.nombre || '').trim(), cuenta: String(e.cuenta), detalle: String(e.detalle || '').slice(0, 300), veces: Number(e.veces) || 1 }))
+      .filter((e) => enPlan.has(e.cuenta));
+
+    // 1. Proveedor que siempre fue a la misma cuenta.
+    const textoFactura = items.map((it) => it.descripcion).join(' ') + ' ' + (req.body.concepto || '');
+    const unica = copiloto.cuentaUnicaDelProveedor(ejemplos, nit, textoFactura);
+    if (unica) return res.json({ cuentas: items.map((_, indice) => ({ indice, codigo: unica })), fuente: 'proveedor' });
+
+    // 2. IA con el plan y los ejemplos más pertinentes.
+    const elegidos = copiloto.elegirEjemplos(ejemplos, nit, textoFactura);
+    const prompt = copiloto.construirPromptCopiloto({ plan, ejemplos: elegidos, nit, nombre: req.body.nombre, concepto: req.body.concepto, items });
+    const cuentas = copiloto.cuentasValidas(await llamarGeminiTextoJSON(prompt), items, plan);
+    res.json({ cuentas, fuente: 'copiloto' });
+  } catch (err) {
+    console.error('Error del copiloto de cuentas:', err.message);
+    res.status(500).json({ error: 'El copiloto no pudo sugerir cuentas.' });
+  }
+});
+
+app.delete('/api/clients/:id/historial-contable', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    await pool.query('DELETE FROM historial_contable_cliente WHERE contador_id = $1 AND cliente_id = $2', [req.firmaId, req.params.id]);
+    await pool.query(`UPDATE clients SET historial_contable_resumen = '' WHERE id = $1 AND contador_id = $2`, [req.params.id, req.firmaId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error borrando la contabilidad anterior del cliente:', err);
+    res.status(500).json({ error: 'No se pudo borrar.' });
+  }
+});
 
 // Lista el PUC propio del cliente, ordenado por código: las cuentas
 // importadas de su programa contable y las que el contador agregó a mano.
@@ -2290,6 +2500,41 @@ app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error leyendo subcuentas aprendidas:', err);
     res.status(500).json({ error: 'No se pudieron leer las subcuentas aprendidas.' });
+  }
+});
+
+// Historial de cuentas por proveedor y concepto: para cada cliente y
+// proveedor, cada subcuenta que se usó (facturas de egreso aprobadas de
+// los últimos 18 meses) con las descripciones de lo que se causó en ella.
+// Un mismo proveedor puede vender cosas de distinta naturaleza -- en la
+// contabilidad real de Bosques, GAMOEZ vendió en un mes aseo (51952501),
+// papelería (51953001) e insumos de piscina (51451022) -- y "la última
+// cuenta usada con ese proveedor" no basta. Ver subcuentaAprendida() en
+// public/retenciones.js, que escoge entre ellas por el texto del ítem.
+app.get('/api/subcuentas-historial', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto,
+              COUNT(*)::int AS veces, MAX(i.saved_at) AS ultima,
+              LEFT(STRING_AGG(DISTINCT fi.descripcion, ' | '), 2000) AS textos
+         FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
+        WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
+          AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
+          AND i.saved_at > now() - interval '18 months'
+        GROUP BY i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto
+       UNION ALL
+       -- Contabilidad anterior importada: sirve para cualquier categoría ('*').
+       SELECT cliente_id, nit, '*', cuenta, veces, importado_at, detalles
+         FROM historial_contable_cliente WHERE contador_id = $1`,
+      [req.firmaId]
+    );
+    res.json(rows
+      .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
+      .map((r) => ({ cliente_id: r.cliente_id, nit: normalizarNit(r.nit_cc), categoria: String(r.categoria_concepto).toLowerCase(),
+        subcuenta: r.subcuenta_gasto, veces: r.veces, ultima: r.ultima, textos: r.textos || '' })));
+  } catch (err) {
+    console.error('Error leyendo el historial de subcuentas:', err);
+    res.status(500).json({ error: 'No se pudo leer el historial de cuentas.' });
   }
 });
 
@@ -3822,6 +4067,33 @@ function sanitizarConfianzaCampos(crudo) {
   return limpio;
 }
 
+// NIT ya conocidos para un nombre de proveedor: los de facturas guardadas
+// (mismo nombre) y los de la contabilidad anterior importada de los
+// clientes (nombre normalizado: sin puntuación ni sigla societaria, así
+// "GAMOEZ S.A.S." y "GAMOEZ SAS" coinciden). Devuelve [{nit, dv}].
+async function nitsConocidosPorNombre(userId, nombre) {
+  const nombreSinTildes = String(nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normalizado = historialContable.normalizarNombreTercero(nombre);
+  const [deFacturas, deContabilidad] = await Promise.all([
+    pool.query(
+      `SELECT nit_cc AS nit, MAX(dv) AS dv, COUNT(*) AS n FROM invoices
+        WHERE contador_id = $1 AND nit_cc <> ''
+          AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
+        GROUP BY nit_cc ORDER BY n DESC LIMIT 3`,
+      [userId, nombreSinTildes.toUpperCase()]
+    ),
+    normalizado.length >= 4
+      ? pool.query(`SELECT DISTINCT nit FROM historial_contable_cliente WHERE contador_id = $1 AND nombre_normalizado = $2 LIMIT 3`, [userId, normalizado])
+      : Promise.resolve({ rows: [] }),
+  ]);
+  const vistos = new Map();
+  [...deFacturas.rows, ...deContabilidad.rows].forEach((r) => {
+    const nit = normalizarNit(r.nit);
+    if (nit && !vistos.has(nit)) vistos.set(nit, { nit, dv: r.dv || '' });
+  });
+  return [...vistos.values()];
+}
+
 async function posprocesarDocumentoExtraido(userId, parsed) {
   if (parsed.documento_valido === false || (parsed.tipo_documento && !TIPOS_DOCUMENTO_VALIDOS.includes(parsed.tipo_documento))) {
     const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
@@ -3891,16 +4163,9 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   // usa ese y se avisa, en vez de dejarlo vacío o inventado.
   if (!parsed.nit_cc && parsed.nombre_razon_social) {
     try {
-      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const { rows } = await pool.query(
-        `SELECT nit_cc, MAX(dv) AS dv, COUNT(*) AS n FROM invoices
-          WHERE contador_id = $1 AND nit_cc <> ''
-            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
-          GROUP BY nit_cc ORDER BY n DESC LIMIT 2`,
-        [userId, nombreSinTildes]
-      );
+      const rows = await nitsConocidosPorNombre(userId, parsed.nombre_razon_social);
       if (rows.length === 1) {
-        parsed.nit_cc = normalizarNit(rows[0].nit_cc);
+        parsed.nit_cc = rows[0].nit;
         if (!parsed.dv && rows[0].dv) parsed.dv = rows[0].dv;
         parsed.nit_desde_historial = true;
         avisosNit.push(`El NIT no se ve en el documento: se tomó ${parsed.nit_cc}, el que ya tienes registrado para ${parsed.nombre_razon_social}. Confírmalo.`);
@@ -3917,15 +4182,7 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   }
   if (parsed.nit_cc && parsed.nombre_razon_social) {
     try {
-      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const { rows } = await pool.query(
-        `SELECT nit_cc, COUNT(*) AS n FROM invoices
-          WHERE contador_id = $1 AND nit_cc <> ''
-            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
-          GROUP BY nit_cc ORDER BY n DESC LIMIT 3`,
-        [userId, nombreSinTildes]
-      );
-      const conocidos = [...new Set(rows.map((r) => normalizarNit(r.nit_cc)).filter(Boolean))];
+      const conocidos = (await nitsConocidosPorNombre(userId, parsed.nombre_razon_social)).map((r) => r.nit);
       if (conocidos.length === 1 && !conocidos.includes(parsed.nit_cc)) {
         // Un solo NIT registrado (y aprobado antes) para este proveedor: se
         // usa ese. La IA a veces "completa de memoria" el NIT de empresas
@@ -4661,7 +4918,7 @@ function normalizarNit(nit) {
 app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.firmaId]
     );
@@ -4683,32 +4940,91 @@ app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'co
     const regimenSimple = !!req.body.regimen_simple;
     const agenteRetencionIva = !!req.body.agente_retencion_iva;
     const declaranteRenta = !!req.body.declarante_renta;
-    const aplicaArticulo383 = !!req.body.aplica_articulo_383;
+    // Art. 383 y "No se le retiene": si la pantalla no los manda (el panel
+    // de perfil de Escanear no tenía el 383, y lo borraba al guardar), se
+    // conserva lo que ya tenía -- no se pierde lo marcado ni lo aprendido.
+    let aplicaArticulo383 = req.body.aplica_articulo_383;
+    let noRetener = req.body.no_retener;
+    if (aplicaArticulo383 === undefined || noRetener === undefined) {
+      const previo = await pool.query('SELECT aplica_articulo_383, no_retener FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
+      const fila = previo.rows[0] || {};
+      if (aplicaArticulo383 === undefined) aplicaArticulo383 = fila.aplica_articulo_383;
+      if (noRetener === undefined) noRetener = fila.no_retener;
+    }
+    aplicaArticulo383 = !!aplicaArticulo383;
+    noRetener = !!noRetener;
 
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
-    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !nombre && !notas) {
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !aplicaArticulo383 && !noRetener && !nombre && !notas) {
       await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
       return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, aplica_articulo_383: false, notas: '', borrado: true });
     }
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, no_retener)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (contador_id, nit) DO UPDATE SET
          nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
          autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
          agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
-         aplica_articulo_383 = EXCLUDED.aplica_articulo_383,
+         aplica_articulo_383 = EXCLUDED.aplica_articulo_383, no_retener = EXCLUDED.no_retener,
          notas = EXCLUDED.notas, updated_at = now()
-       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
-      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas]
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at`,
+      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, aplicaArticulo383, notas, noRetener]
     );
     res.json(rows[0]);
   } catch (err) {
     console.error('Error guardando perfil fiscal del tercero:', err);
     res.status(500).json({ error: 'No se pudo guardar el perfil fiscal.' });
+  }
+});
+
+// La contadora guardó una factura SIN la retención que el sistema
+// proponía, y dijo por qué. En la prueba con la contabilidad real de
+// Bosques (julio), 7 de 25 facturas iban sin retención por criterio de la
+// contadora (autorretenedores, Régimen Simple, Art. 383...), y el sistema
+// la seguía proponiendo cada mes: un "sin retención" no se aprendía.
+// Aquí se recuerda según el motivo:
+//   autorretenedor / regimen_simple / articulo_383 -> marca en el perfil
+//     fiscal del proveedor (sin tocar las demás marcas que ya tuviera);
+//   no_retener -> tarifa aprendida 0 para ese proveedor en esa categoría;
+//   solo_esta_vez -> nada.
+const MOTIVOS_SIN_RETENCION = {
+  autorretenedor: 'autorretenedor',
+  regimen_simple: 'regimen_simple',
+  articulo_383: 'aplica_articulo_383',
+};
+app.post('/api/proveedores/motivo-sin-retencion', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const nit = normalizarNit(req.body.nit);
+    const motivo = String(req.body.motivo || '');
+    const categoria = String(req.body.categoria || '').trim().toLowerCase();
+    const nombre = String(req.body.nombre || '').trim().slice(0, 200);
+    if (!nit) return res.status(400).json({ error: 'Falta el NIT del proveedor.' });
+    if (motivo === 'solo_esta_vez') return res.json({ ok: true });
+    const columna = MOTIVOS_SIN_RETENCION[motivo];
+    if (columna) {
+      const { rows } = await pool.query(
+        `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, ${columna})
+         VALUES ($1, $2, $3, $4, true)
+         ON CONFLICT (contador_id, nit) DO UPDATE SET ${columna} = true,
+           nombre = COALESCE(NULLIF(EXCLUDED.nombre, ''), terceros_fiscales.nombre), updated_at = now()
+         RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, no_retener, notas, updated_at`,
+        [crypto.randomUUID(), req.firmaId, nit, nombre]
+      );
+      return res.json({ ok: true, perfil: rows[0] });
+    }
+    if (motivo === 'no_retener') {
+      if (!TARIFAS_RETENCION[categoria]) return res.status(400).json({ error: 'Categoría de retención no válida.' });
+      await guardarTarifaProveedor(req.firmaId, nit, categoria, 0);
+      return res.json({ ok: true, tarifa: { nit_proveedor: nit, categoria, tarifa: 0 } });
+    }
+    res.status(400).json({ error: 'Motivo no válido.' });
+  } catch (err) {
+    console.error('Error guardando el motivo sin retención:', err);
+    res.status(500).json({ error: 'No se pudo guardar el motivo.' });
   }
 });
 
@@ -4893,6 +5209,63 @@ app.get('/api/lotes/mios', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error leyendo los lotes del usuario:', err);
     res.status(500).json({ error: 'No se pudieron consultar tus lotes.' });
+  }
+});
+
+// Pendientes por revisar, por cliente, de TODA la firma (respetando los
+// clientes asignados): para que se sepa que hay trabajo a medias aunque lo
+// haya dejado otra persona (ej. Mafe leyó facturas de Bosques y otro
+// contador de Codcol).
+//   leidas: facturas leídas en Escanear/Carga masiva que todavía no se
+//     guardan ni se quitan (últimos 30 días), por quién las subió;
+//   borradores: guardadas pero sin aprobar (esperan en Revisión).
+app.get('/api/pendientes', requireAuth, async (req, res) => {
+  try {
+    const [leidas, borradores] = await Promise.all([
+      pool.query(
+        `SELECT lp.cliente_id AS cliente_lote, li.cliente_id_detectado AS cliente_detectado, lp.usuario_id,
+                u.nombre AS usuario_nombre, u.email AS usuario_email, COUNT(*) AS cantidad, MIN(li.created_at) AS desde
+           FROM lote_items li
+           JOIN lotes_procesamiento lp ON lp.id = li.lote_id
+           LEFT JOIN users u ON u.id = lp.usuario_id
+          WHERE lp.contador_id = $1 AND li.eliminado = false
+            AND li.estado IN ('listo', 'revisar', 'error', 'duplicado', 'pendiente', 'procesando')
+            AND lp.created_at > $2
+          GROUP BY lp.cliente_id, li.cliente_id_detectado, lp.usuario_id, u.nombre, u.email`,
+        [req.firmaId, new Date(Date.now() - 30 * 86400000)]
+      ),
+      pool.query(
+        `SELECT cliente_id, COUNT(*) AS cantidad FROM invoices
+          WHERE contador_id = $1 AND aprobado_por_contador = false GROUP BY cliente_id`,
+        [req.firmaId]
+      ),
+    ]);
+    const porCliente = new Map();
+    const de = (clienteId) => {
+      const k = clienteId || '';
+      if (!porCliente.has(k)) porCliente.set(k, { cliente_id: clienteId || null, leidas: [], leidas_total: 0, borradores: 0 });
+      return porCliente.get(k);
+    };
+    for (const r of leidas.rows) {
+      // El cliente del lote; si se subió sin cliente fijo, el detectado.
+      const clienteId = r.cliente_lote || r.cliente_detectado || null;
+      if (!puedeAccederCliente(req, clienteId)) continue;
+      const p = de(clienteId);
+      const cantidad = Number(r.cantidad) || 0;
+      const usuario = String(r.usuario_nombre || '').trim() || String(r.usuario_email || '').trim() || 'Sin usuario';
+      const previa = p.leidas.find((l) => l.usuario_id === r.usuario_id);
+      if (previa) { previa.cantidad += cantidad; if (r.desde < previa.desde) previa.desde = r.desde; }
+      else p.leidas.push({ usuario_id: r.usuario_id, usuario, propias: r.usuario_id === req.userId || !r.usuario_id, cantidad, desde: r.desde });
+      p.leidas_total += cantidad;
+    }
+    for (const r of borradores.rows) {
+      if (!puedeAccederCliente(req, r.cliente_id)) continue;
+      de(r.cliente_id).borradores += Number(r.cantidad) || 0;
+    }
+    res.json([...porCliente.values()].filter((p) => p.leidas_total > 0 || p.borradores > 0));
+  } catch (err) {
+    console.error('Error leyendo los pendientes por cliente:', err);
+    res.status(500).json({ error: 'No se pudieron consultar los pendientes.' });
   }
 });
 

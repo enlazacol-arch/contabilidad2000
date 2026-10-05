@@ -91,7 +91,7 @@ test('perfilFiscalEfectivo: el perfil guardado en terceros fiscales aplica aunqu
   const perfilTercero = { regimen_simple: true, autorretenedor: true, declarante_renta: true };
   const inv = {}; // esta factura puntual no trae ninguna marca -- debe igual ganar por la ficha de terceros
   const efectivo = perfilFiscalEfectivo(inv, perfilTercero);
-  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false });
+  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false, noRetener: false });
 });
 
 test('perfilFiscalEfectivo: sin perfil de tercero, cae a lo leído de la factura puntual', () => {
@@ -554,4 +554,21 @@ test('servicios públicos con un ítem por servicio: cada línea a su subcuenta,
   }, ['servicios_publicos', 'otro']);
   R.registrarSubcuentasAprendidas({});
   assert.deepEqual(items.map((it) => it.subcuenta_gasto), ['513525', '513525', '513530', '513530', '']);
+});
+
+test('cuenta por proveedor y concepto: GAMOEZ vende aseo, papelería y piscina, y cada ítem va a su cuenta', () => {
+  const R = require('../public/retenciones');
+  // Lo que la contadora causó antes con GAMOEZ en Bosques (julio 2026).
+  R.registrarSubcuentasAprendidas({ 'BOSQUES|901627469|compras': '51451022' }); // la última usada
+  R.registrarHistorialSubcuentas([
+    { cliente_id: 'BOSQUES', nit: '901627469', categoria: 'compras', subcuenta: '51952501', veces: 6, textos: 'AMBIENTADOR AEROSOL | BOLSA ROLLO PRECORTE | LIMPIA PISOS | DETERGENTE EN POLVO | ESCOBA SUAVE | GUANTES LATEX' },
+    { cliente_id: 'BOSQUES', nit: '901627469', categoria: 'compras', subcuenta: '51953001', veces: 2, textos: 'CINTA ENMASCARAR | MARCADOR BORRABLE | RESMA PAPEL CARTA' },
+    { cliente_id: 'BOSQUES', nit: '901627469', categoria: 'compras', subcuenta: '51451022', veces: 2, textos: 'ALGUICIDA PISCINA | CLORO GRANULADO PISCINA | ESPONJAS' },
+  ]);
+  assert.equal(R.subcuentaAprendida('901627469', 'compras', 'BOSQUES', 'MARCADOR BORRABLE NEGRO'), '51953001');
+  assert.equal(R.subcuentaAprendida('901627469', 'compras', 'BOSQUES', 'DETERGENTE LIQUIDO X 4L'), '51952501');
+  assert.equal(R.subcuentaAprendida('901627469', 'compras', 'BOSQUES', 'CLORO PISCINA 50 KG'), '51451022');
+  // Sin palabras en común: la última usada, como antes.
+  assert.equal(R.subcuentaAprendida('901627469', 'compras', 'BOSQUES', 'ARTICULO NUEVO'), '51451022');
+  R.registrarSubcuentasAprendidas({}); R.registrarHistorialSubcuentas([]);
 });

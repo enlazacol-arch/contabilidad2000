@@ -443,6 +443,10 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   // cédulas de personas naturales no tienen esa forma (hasta 8 dígitos,
   // o 10 que empiezan por 1), así que para ellas sigue el rango.
   const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta) || esNitPersonaJuridica(inv.nit_cc);
+  // "A este proveedor no se le retiene": aprendido de la contabilidad
+  // anterior del cliente o marcado por la contadora (ver
+  // public/historial-contable.js). Como autorretenedor: sin retención.
+  const noRetener = !!(perfilTercero && perfilTercero.no_retener);
   // Art. 383: lo marca el contador en la ficha de Terceros fiscales (a
   // partir de la certificación del contratista), o lo detecta la IA
   // cuando el propio documento lo dice -- muchas cuentas de cobro de
@@ -453,7 +457,7 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
     inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true' ||
     NITS_ARTICULO_383.has(String(inv.nit_cc || '').replace(/-\s*\d$/, '').replace(/[^0-9]/g, ''));
-  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383 };
+  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener };
 }
 
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
@@ -651,6 +655,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple) return null; // Régimen Simple -- Rete Fuente no aplica
   if (perfil.autorretenedor) return null; // el proveedor se autorretiene -- el comprador no debe practicar retención ordinaria
+  if (perfil.noRetener) return null; // a este proveedor no se le retiene (contabilidad anterior o decisión de la contadora)
 
   let desglose = null;
   try {
@@ -815,7 +820,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   acumulados = acumulados || {};
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
-  if (perfil.regimenSimple || perfil.autorretenedor) {
+  if (perfil.regimenSimple || perfil.autorretenedor || perfil.noRetener) {
     return { porItem: items.map(() => null), bajo: 0, alto: 0, mismaTarifa: true, cuentasPUC: [], requiereAiu: false, itemsFaltantesAiu: [] };
   }
 
@@ -916,7 +921,7 @@ function subcuentaPorTexto(categoria, texto) {
 // documento, las palabras del texto, y si nada aplica, '' (la pantalla
 // usa la primera opción de la lista).
 function subcuentaSugerida(nit, categoria, texto, clienteId) {
-  return subcuentaAprendida(nit, categoria, clienteId)
+  return subcuentaAprendida(nit, categoria, clienteId, texto)
     || (categoria === 'servicios_publicos' ? subcuentaServicioPublico(texto) : '')
     || subcuentaPorTexto(categoria, texto);
 }
@@ -931,14 +936,112 @@ let SUBCUENTAS_APRENDIDAS = {};
 function registrarSubcuentasAprendidas(mapa) {
   SUBCUENTAS_APRENDIDAS = mapa && typeof mapa === 'object' ? mapa : {};
 }
+// Historial por proveedor y concepto (GET /api/subcuentas-historial): las
+// subcuentas que se usaron con cada proveedor, con las descripciones de lo
+// que se causó en cada una. Clave "clienteId|NIT|categoria" y "NIT|categoria".
+let HISTORIAL_SUBCUENTAS = {};
+// Palabras que no dicen qué se compró (preposiciones, colores, tamaños).
+const RAICES_COMUNES_HISTORIAL = new Set(['PARA', 'CON', 'POR', 'LOS', 'LAS', 'DEL', 'UNID', 'COLO', 'TAMA', 'GRAN', 'PEQU',
+  'BLAN', 'NEGR', 'ROJA', 'ROJO', 'VERD', 'AZUL', 'AMAR', 'GRIS', 'MEDI', 'NUEV', 'SERV', 'PAGO', 'MENS']);
+function raicesHistorial(texto) {
+  return new Set(String(texto || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter((p) => p.length >= 4).map((p) => p.slice(0, 5))
+    .filter((p) => !RAICES_COMUNES_HISTORIAL.has(p.slice(0, 4))));
+}
+function registrarHistorialSubcuentas(filas) {
+  HISTORIAL_SUBCUENTAS = {};
+  (Array.isArray(filas) ? filas : []).forEach((f) => {
+    const clave = `${String(f.nit || '').replace(/[^0-9]/g, '')}|${String(f.categoria || '').toLowerCase()}`;
+    const entrada = { subcuenta: String(f.subcuenta || ''), raices: raicesHistorial(f.textos), veces: Number(f.veces) || 0, ultima: f.ultima ? new Date(f.ultima).getTime() : 0 };
+    if (!entrada.subcuenta) return;
+    // También por concepto en TODO el cliente, sin importar el proveedor
+    // ("${cliente}|*|categoria"): en Bosques los bombillos van a 51451011
+    // y los parqueaderos a 519565, venga de quien venga la factura.
+    const claveCliente = f.cliente_id ? `${f.cliente_id}|*|${String(f.categoria || '').toLowerCase()}` : null;
+    for (const k of [f.cliente_id ? `${f.cliente_id}|${clave}` : null, clave, claveCliente]) {
+      if (!k) continue;
+      const lista = HISTORIAL_SUBCUENTAS[k] = HISTORIAL_SUBCUENTAS[k] || [];
+      const existente = lista.find((e) => e.subcuenta === entrada.subcuenta);
+      if (existente) {
+        entrada.raices.forEach((r) => existente.raices.add(r));
+        existente.veces += entrada.veces;
+        existente.ultima = Math.max(existente.ultima, entrada.ultima);
+      } else {
+        lista.push({ ...entrada, raices: new Set(entrada.raices) });
+      }
+    }
+  });
+}
+
+// Entre varias cuentas usadas con el mismo proveedor, la que más se
+// parece al texto del ítem (palabras en común con lo que se causó antes
+// en cada cuenta; las palabras que aparecen en TODAS no distinguen nada).
+// '' si no hay varias cuentas o ninguna se parece.
+function subcuentaPorHistorial(lista, texto, minimoCuentas = 2, minimoPalabras = 1) {
+  if (!Array.isArray(lista) || lista.length < minimoCuentas || !texto) return '';
+  const delTexto = raicesHistorial(texto);
+  const enTodas = new Set([...lista[0].raices].filter((r) => lista.every((e) => e.raices.has(r))));
+  let mejor = null, mejorPuntaje = 0;
+  for (const e of lista) {
+    let puntaje = 0;
+    delTexto.forEach((r) => { if (!enTodas.has(r) && e.raices.has(r)) puntaje++; });
+    if (puntaje > mejorPuntaje || (puntaje === mejorPuntaje && puntaje > 0 && mejor && (e.veces > mejor.veces || (e.veces === mejor.veces && e.ultima > mejor.ultima)))) {
+      mejor = e; mejorPuntaje = puntaje;
+    }
+  }
+  return mejorPuntaje >= minimoPalabras ? mejor.subcuenta : '';
+}
+
 // Con `clienteId`, primero lo aprendido con ESE cliente (clave
 // "clienteId|NIT|categoria"): con planes de cuentas propios, el auxiliar
-// que se usó para otro cliente puede no existir en el de este.
-function subcuentaAprendida(nit, categoria, clienteId) {
+// que se usó para otro cliente puede no existir en el de este. Con
+// `texto` (descripción del ítem), si con ese proveedor se usaron varias
+// cuentas, se escoge por concepto (ver subcuentaPorHistorial); si no, la
+// última usada.
+// Junta las listas del historial de varias claves (la de la categoría y
+// la '*' de la contabilidad importada), sumando las entradas de la misma
+// subcuenta.
+function unirHistorial(...listas) {
+  const porCuenta = new Map();
+  listas.filter(Array.isArray).forEach((lista) => lista.forEach((e) => {
+    const previa = porCuenta.get(e.subcuenta);
+    if (!previa) porCuenta.set(e.subcuenta, { ...e, raices: new Set(e.raices) });
+    else { e.raices.forEach((r) => previa.raices.add(r)); previa.veces += e.veces; previa.ultima = Math.max(previa.ultima, e.ultima); }
+  }));
+  return [...porCuenta.values()];
+}
+
+function subcuentaAprendida(nit, categoria, clienteId, texto) {
   const nitLimpio = String(nit == null ? '' : nit).replace(/-\s*\d$/, '').replace(/[^0-9]/g, '');
   if (!nitLimpio || !categoria) return '';
-  const clave = `${nitLimpio}|${String(categoria).toLowerCase()}`;
-  return (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
+  const cat = String(categoria).toLowerCase();
+  const clave = `${nitLimpio}|${cat}`;
+  // Cuentas usadas con este proveedor: en facturas de Enlaza (por
+  // categoría) y en la contabilidad anterior importada ('*').
+  const delProveedorLista = clienteId
+    ? unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|${clave}`], HISTORIAL_SUBCUENTAS[`${clienteId}|${nitLimpio}|*`])
+    : unirHistorial(HISTORIAL_SUBCUENTAS[clave]);
+  const porConcepto = subcuentaPorHistorial(delProveedorLista, texto);
+  if (porConcepto) return porConcepto;
+  const delProveedor = (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
+  if (delProveedor) return delProveedor;
+  // Con este proveedor siempre se usó la misma cuenta (contabilidad
+  // importada): esa, si hay historia suficiente (3+ veces) o el concepto se
+  // parece. Con poca historia y otro concepto (a la administradora solo se
+  // le había pagado un transporte; su cobro de administración no va ahí),
+  // mejor que decida el copiloto de cuentas.
+  if (delProveedorLista.length === 1) {
+    const unica = delProveedorLista[0];
+    const delTexto = raicesHistorial(texto);
+    if (unica.veces >= 3 || !texto || [...delTexto].some((r) => unica.raices.has(r))) return unica.subcuenta;
+  }
+  // Proveedor nuevo para este cliente: lo que el cliente ya causó con un
+  // concepto parecido, de cualquier proveedor -- con al menos 2 palabras
+  // en común (con una sola, "silla BLANCA" caía en "copia BLANCO y negro");
+  // si no alcanza, decide el copiloto de cuentas (/copiloto-cuentas.js).
+  return clienteId
+    ? subcuentaPorHistorial(unirHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${cat}`], HISTORIAL_SUBCUENTAS[`${clienteId}|*|*`]), texto, 1, 2)
+    : '';
 }
 
 // ---------- AIU consolidado (vigilancia, aseo, temporales) ----------
@@ -1072,6 +1175,11 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       const porServicio = subcuentaServicioPublico(textoItem);
       if (porServicio) return porServicio;
     }
+    // Con este proveedor ya se usaron varias cuentas: la que corresponde
+    // al concepto de ESTA línea (sin el nombre del proveedor, que no dice
+    // nada de qué se compró).
+    const porConcepto = textoItem ? subcuentaAprendida(data.nit_cc, categoria, null, textoItem) : '';
+    if (porConcepto) return porConcepto;
     const sugerida = subcuentaSugerida(data.nit_cc, categoria, `${data.nombre_razon_social || ''} ${textoItem || data.concepto || ''}`);
     if (sugerida) return sugerida;
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
@@ -1503,6 +1611,7 @@ if (typeof module !== 'undefined' && module.exports) {
     autoCompletarAiuDesdeDescripcion,
     consolidarAiuEnItems,
     registrarSubcuentasAprendidas,
+    registrarHistorialSubcuentas,
     subcuentaServicioPublico,
     subcuentaPorTexto,
     subcuentaSugerida,

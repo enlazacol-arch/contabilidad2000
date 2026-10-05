@@ -265,8 +265,8 @@ test('asiento con plan del cliente: nombres del cliente y retención al auxiliar
   assert.equal(r.debe, r.haber);
 });
 
-test('asiento: cliente no responsable de IVA -> el IVA va a su cuenta "IVA ..." del gasto, nada a la 2408', () => {
-  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '51451006', subtotal: '1000000', valor_iva: '190000' }], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true });
+test('asiento: cliente no responsable de IVA con "cuenta IVA" -> el IVA va a su cuenta "IVA ..." del gasto, nada a la 2408', () => {
+  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '51451006', subtotal: '1000000', valor_iva: '190000' }], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true, ivaEnCuentaIva: true });
   assert.equal(lineaDe(r, '51451002').debito, 190000);
   assert.ok(!r.lineas.some((l) => l.cuenta_codigo.startsWith('2408')));
   assert.equal(r.debe, r.haber);
@@ -279,7 +279,7 @@ test('asiento: no responsable de IVA sin cuenta "IVA ..." -> el IVA se suma al g
 });
 
 test('asiento: no responsable de IVA, factura sin ítems -> el IVA se reparte al gasto de la cabecera', () => {
-  const r = generarAsientoEgreso({ ...facturaServicio, subcuenta_gasto: '513507', categoria_concepto: 'vigilancia_aseo', rete_fuente: '0' }, [], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true });
+  const r = generarAsientoEgreso({ ...facturaServicio, subcuenta_gasto: '513507', categoria_concepto: 'vigilancia_aseo', rete_fuente: '0' }, [], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true, ivaEnCuentaIva: true });
   assert.equal(lineaDe(r, '513507').debito, 1000000);
   assert.equal(lineaDe(r, '513508').debito, 190000);
 });
@@ -318,4 +318,28 @@ test('asiento: una diferencia grande entre ítems y subtotal sigue sin proponers
     [{ categoria_concepto: 'compras', subcuenta_gasto: '519525', subtotal: '500000' }]
   );
   assert.equal(r.error, 'asiento_no_cuadra');
+});
+
+test('asiento: no responsable de IVA (por defecto) -> el IVA se suma a la MISMA cuenta del gasto, como lo lleva Mafe', () => {
+  // Coraza julio en la contabilidad de Bosques: 513507 VIGILANCIA por el total con IVA.
+  const r = generarAsientoEgreso(
+    { tipo_movimiento: 'egreso', categoria_concepto: 'vigilancia_aseo', valor_sin_iva: '23981409', valor_iva: '455647', valor_con_iva: '24437056', rete_fuente: '0' },
+    [{ categoria_concepto: 'vigilancia_aseo', subcuenta_gasto: '513507', subtotal: '23981409', valor_iva: '455647' }],
+    { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true });
+  assert.equal(lineaDe(r, '513507').debito, 24437056);
+  assert.equal(lineaDe(r, '513508'), undefined);
+  assert.equal(r.debe, r.haber);
+});
+
+test('asiento: IVA al gasto controlado en cuentas de orden 839519 / 869519', () => {
+  const plan = [...PLAN_CLIENTE, cuentaCli('839519', 'IVA'), cuentaCli('869519', 'IVA 19')];
+  const r = generarAsientoEgreso(
+    { tipo_movimiento: 'egreso', categoria_concepto: 'servicios', valor_sin_iva: '709770', valor_iva: '134856', valor_con_iva: '844626', rete_fuente: '28391' },
+    [{ categoria_concepto: 'servicios', subcuenta_gasto: '51451006', subtotal: '709770', valor_iva: '134856' }],
+    { pucCliente: plan, ivaMayorValorGasto: true, ivaCuentasOrden: true });
+  assert.equal(lineaDe(r, '51451006').debito, 844626);
+  assert.equal(lineaDe(r, '839519').debito, 134856);
+  assert.equal(lineaDe(r, '869519').credito, 134856);
+  assert.equal(lineaDe(r, '23652502').credito, 28391);
+  assert.equal(r.debe, r.haber);
 });

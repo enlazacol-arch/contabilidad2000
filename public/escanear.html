@@ -12,6 +12,8 @@
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
 <script src="/comprimir-imagen.js"></script>
+<script src="/motivo-sin-retencion.js"></script>
+<script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -347,6 +349,7 @@
   }
   .item-del-btn:hover{ border-color:var(--err); color:var(--err); }
   .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:var(--t-12); color:var(--ink-soft); }
+  .it-copiloto{ margin-top:3px; font-size:var(--t-12); color:var(--pet-600); }
   .item-iva-mv-todas{ cursor:pointer; text-transform:none; letter-spacing:0; font-weight:600; margin-top:4px; }
   .items-foot{
     display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -863,10 +866,31 @@ function ajustarItemsAlPucCliente(items, clienteId, textoFactura){
   (items || []).forEach((it) => {
     if (it._subcuentaManual || it._pucCliente === clienteId) return;
     if (it._subcuentaEstandar === undefined) it._subcuentaEstandar = it.subcuenta_gasto || '';
-    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(nit, it.categoria_concepto, clienteId) : '';
+    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(nit, it.categoria_concepto, clienteId, it.descripcion) : '';
     it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${textoFactura || ''}`);
     it._pucCliente = clienteId;
   });
+}
+
+// Copiloto de cuentas (ver /copiloto-cuentas.js): si el cliente tiene plan
+// propio y el sistema no sabe a qué cuenta va esta factura (proveedor o
+// concepto nuevos), se pide una vez y se aplica a los ítems no elegidos a
+// mano; la cuenta de la factura sigue a la del primer ítem.
+async function consultarCopilotoEscanear(){
+  const clienteId = currentClienteId;
+  const puc = pucPersonalizadoPorCliente[clienteId];
+  if (!clienteId || !puc || puc.length === 0 || !currentInvoiceData || typeof pedirCopilotoCuentas !== 'function') return;
+  const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+  const nit = nitInput ? nitInput.value : (currentInvoiceData.nit_cc || '');
+  if (!necesitaCopiloto(clienteId, nit, currentItems)) return;
+  const itemsAlPedir = currentItems;
+  const respuesta = await pedirCopilotoCuentas(clienteId, { ...currentInvoiceData, nit_cc: nit, items: currentItems });
+  if (itemsAlPedir !== currentItems || clienteId !== currentClienteId) return; // ya se abrió otra factura
+  if (!aplicarCopilotoAItems(currentItems, respuesta, clienteId)) return;
+  const sel = document.getElementById('subcuentaGastoSelect');
+  const primera = currentItems[0] && currentItems[0].subcuenta_gasto;
+  if (sel && primera && [...sel.options].some((o) => o.value === primera)) { sel.value = primera; currentSubcuentaGasto = primera; }
+  renderItemsPanel();
 }
 
 // Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
@@ -940,6 +964,9 @@ async function loadSubcuentasAprendidas(){
   try {
     const res = await fetch('/api/subcuentas-aprendidas');
     if (res.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await res.json());
+    // Cuentas usadas con cada proveedor y para qué (escoge por concepto).
+    const resHist = await fetch('/api/subcuentas-historial');
+    if (resHist.ok && typeof registrarHistorialSubcuentas === 'function') registrarHistorialSubcuentas(await resHist.json());
     const res383 = await fetch('/api/articulo-383-por-nit');
     if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
   } catch (e) {
@@ -2364,6 +2391,7 @@ const CAMPOS_PERFIL_FISCAL = [
   ['regimen_simple', 'Régimen Simple (RST)', 'Fuerza Rete Fuente y Rete ICA a $0. No exime de Rete IVA -- esa regla no cambia.'],
   ['agente_retencion_iva', 'Agente de retención de IVA', 'Informativo -- revisa si a este proveedor NO le corresponde que tu cliente le practique Rete IVA.'],
   ['declarante_renta', 'Declarante de renta', 'Cuando lo marcas, Enlaza usa la tarifa exacta de declarante en vez del rango bajo-alto en las categorías donde la tarifa depende de esto.'],
+  ['no_retener', 'No se le retiene', 'Enlaza no le propone Rete Fuente. Se marca sola al importar la contabilidad anterior del cliente o al guardar una factura sin retención con ese motivo.'],
 ];
 
 function renderPerfilTerceroPanel(nit, nombreSugerido){
@@ -2929,6 +2957,14 @@ function showRetencionHint(data){
     return;
   }
 
+  if (perfilTercero && perfilTercero.no_retener && !esAutorretenedor) {
+    retencionHintEl.innerHTML = `<b>ℹ A este proveedor no se le retiene</b>` +
+      `Así está en la contabilidad anterior de tus clientes o lo marcaste antes (perfil fiscal del proveedor). Si cambió, desmárcalo en su perfil fiscal o en Configuración.` +
+      (reteIvaAplicaAviso ? ` Revisa si corresponde <b>Rete IVA</b> aparte.${reteIvaTexto}` : '');
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
   if (esAutorretenedor) {
     const origenAutorretenedor = perfilTercero && perfilTercero.autorretenedor;
     html += `<b>ℹ Proveedor autorretenedor${origenAutorretenedor ? ' (marcado en su perfil fiscal)' : ' detectado'}</b>` +
@@ -2976,6 +3012,16 @@ function showRetencionHint(data){
       avisoUvtRespaldo +
       `<span class="fine">Concepto DIAN 100202208-1587. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
+  // A este proveedor no se le retiene en esta categoría: lo decidió la
+  // contadora al guardar una factura anterior (tarifa aprendida 0, ver
+  // /motivo-sin-retencion.js).
+  if (sugerido && sugerido.mismaTarifa && sugerido.bajo === 0 && sugerido.tarifaAplicada === 0) {
+    retencionHintEl.innerHTML = `<b>Sin retención en la fuente para este proveedor</b>` +
+      `Marcaste antes que a este proveedor no se le retiene en esta categoría. Si cambió, ajústalo en Configuración → Tarifas aprendidas.`;
     retencionHintEl.classList.add('show');
     return;
   }
@@ -3085,6 +3131,7 @@ function renderItemsPanel(){
   if (!panel || currentItems.length === 0) { if (panel) panel.innerHTML = ''; return; }
   ajustarItemsAlPucCliente(currentItems, currentClienteId,
     currentInvoiceData ? `${currentInvoiceData.nombre_razon_social || ''} ${currentInvoiceData.concepto || ''}` : '');
+  consultarCopilotoEscanear();
 
   const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
   const fechaInput = ledger.querySelector('input[data-key="fecha_factura"]');
@@ -3151,7 +3198,8 @@ function renderItemsPanel(){
     // pide la cuenta escrita a mano en su lugar.
     const subcuentaFieldHtml = (opcionesSubcuenta.length === 0 && personalizadosItem.length === 0)
       ? `<input type="text" class="it-subcuenta" style="min-width:170px;" placeholder="Código y nombre de la cuenta" value="${escapeHtml(item.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
-      : `<select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>`;
+      : `<select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>` +
+        (item._copiloto && !item._subcuentaManual ? `<div class="it-copiloto">${escapeHtml(TEXTO_FUENTE_COPILOTO[item._copiloto] || '')}</div>` : '');
     const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
     // Selector de tarifa de retención para ESTE ítem puntual -- recomienda
     // la tarifa legal de su categoría (misma tabla que usa el estimado de
@@ -3383,8 +3431,15 @@ function currentFieldValues(){
 // error (nunca viene impreso), pero valor_sin_iva/valor_con_iva vacíos sí
 // lo son -- una factura sin esos dos números no se puede registrar.
 const CAMPOS_VALOR_OBLIGATORIOS = ['valor_sin_iva', 'valor_con_iva'];
+// Si la única razón para no guardar es una Rete Fuente propuesta que quedó
+// en $0, se pregunta el motivo junto al botón "Guardar de todas formas"
+// (ver /motivo-sin-retencion.js) -- aquí se deja el proveedor y las
+// categorías de esa factura para recordarlo.
+let retencionSinAplicar = null;
+
 function detectarInconsistenciasValores(payload){
   const problemas = [];
+  retencionSinAplicar = null;
   for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
     const raw = payload[key];
     if (raw === '' || raw === undefined || raw === null) {
@@ -3460,6 +3515,12 @@ function detectarInconsistenciasValores(payload){
           ? `$${sugeridoAviso.bajo.toLocaleString('es-CO')}`
           : `$${sugeridoAviso.bajo.toLocaleString('es-CO')} – $${sugeridoAviso.alto.toLocaleString('es-CO')}`;
         problemas.push(`El sistema calculó una Rete Fuente sugerida de ${montoTexto} para esta factura, pero el campo "Rete Fuente" quedó en $0 -- revisa si olvidaste darle clic a "Usar $..." antes de guardar.`);
+        const categorias = Object.keys(currentDesgloseCategorias || {});
+        const catSelect = ledger.querySelector('select[data-key="categoria_concepto"]');
+        retencionSinAplicar = {
+          nit: payload.nit_cc, nombre: payload.nombre_razon_social,
+          categorias: categorias.length > 0 ? categorias : [catSelect ? catSelect.value : payload.categoria_concepto].filter(Boolean),
+        };
       }
     }
     if (reteIvaActual === 0 && clienteAviso && typeof calcularReteIvaSugerido === 'function') {
@@ -3491,10 +3552,25 @@ async function guardarFactura(forzar){
   const payloadPreview = currentFieldValues();
   const problemas = detectarInconsistenciasValores(payloadPreview);
   if (problemas.length > 0 && !forzar) {
-    errEl.innerHTML = `⚠ Revisa antes de guardar:<br>${problemas.map(p => escapeHtml(p)).join('<br>')} ` +
+    const motivoHtml = (retencionSinAplicar && typeof selectorMotivoSinRetencionHtml === 'function')
+      ? `<div style="margin-top:8px;">${selectorMotivoSinRetencionHtml('id="motivoSinRetencionEscanear"')}</div>` : '';
+    errEl.innerHTML = `⚠ Revisa antes de guardar:<br>${problemas.map(p => escapeHtml(p)).join('<br>')} ${motivoHtml}` +
       `<button type="button" id="btnGuardarPeseAInconsistencia" style="margin-top:6px;font-size:var(--t-12);font-weight:600;padding:5px 10px;border-radius:var(--r-sm);border:1px solid var(--err);background:#fff;color:var(--err);cursor:pointer;">Guardar de todas formas</button>`;
     errEl.classList.add('show');
-    document.getElementById('btnGuardarPeseAInconsistencia').addEventListener('click', () => guardarFactura('forzar_inconsistencia'));
+    document.getElementById('btnGuardarPeseAInconsistencia').addEventListener('click', async () => {
+      // Sin retención por criterio de la contadora: se recuerda el motivo
+      // para las próximas facturas de este proveedor.
+      const selector = document.getElementById('motivoSinRetencionEscanear');
+      const motivo = selector ? selector.value : '';
+      if (retencionSinAplicar && motivo && motivo !== 'solo_esta_vez') {
+        let ok = true;
+        for (const categoria of retencionSinAplicar.categorias) {
+          ok = (await registrarMotivoSinRetencion({ nit: retencionSinAplicar.nit, nombre: retencionSinAplicar.nombre, categoria, motivo })) && ok;
+        }
+        Aviso.mostrar(ok ? `${retencionSinAplicar.nombre || 'Proveedor'}: ${TEXTO_MOTIVO_SIN_RETENCION[motivo]}.` : 'No se pudo recordar el motivo; la factura igual se guarda.', ok ? {} : { tipo: 'error' });
+      }
+      guardarFactura('forzar_inconsistencia');
+    });
     return;
   }
 

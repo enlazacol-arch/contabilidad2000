@@ -13,6 +13,8 @@
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
 <script src="/comprimir-imagen.js"></script>
+<script src="/motivo-sin-retencion.js"></script>
+<script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -323,6 +325,7 @@
     margin:0 0 14px; padding:10px 14px; border:1px solid var(--pet-200); background:var(--pet-100); border-radius:var(--r-md);
     font-size:var(--t-13); color:var(--ink); }
   .aviso-nuevas[hidden]{ display:none; }
+  .it-copiloto{ margin-top:3px; font-size:var(--t-12); color:var(--pet-600); }
 </style>
 </head>
 <body>
@@ -576,7 +579,7 @@ function ajustarItemsAlPucClienteMasivo(item){
   d.items.forEach((it) => {
     if (it._subcuentaManual || it._pucCliente === item.clienteId) return;
     if (it._subcuentaEstandar === undefined) it._subcuentaEstandar = it.subcuenta_gasto || '';
-    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, it.categoria_concepto, item.clienteId) : '';
+    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(d.nit_cc, it.categoria_concepto, item.clienteId, it.descripcion) : '';
     it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${texto}`);
     it._pucCliente = item.clienteId;
   });
@@ -1027,7 +1030,8 @@ function renderItemsMiniPanel(item){
     // pide la cuenta escrita a mano en su lugar (mismo patrón de Escanear).
     const subcuentaFieldHtml = (opcionesSubcuenta.length === 0 && personalizadosItem.length === 0)
       ? `<input type="text" class="im-subcuenta" style="min-width:160px;" placeholder="Código y nombre de la cuenta" value="${escapeHtml(it.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
-      : `<select class="im-subcuenta" style="min-width:160px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>`;
+      : `<select class="im-subcuenta" style="min-width:160px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>` +
+        (it._copiloto && !it._subcuentaManual ? `<div class="it-copiloto">${escapeHtml(TEXTO_FUENTE_COPILOTO[it._copiloto] || '')}</div>` : '');
     // Tarifa de retención recomendada para este ítem, según su categoría
     // (misma tabla que usa el estimado de arriba) -- informativa, el
     // valor real de Rete Fuente se registra una sola vez en la ficha.
@@ -1868,8 +1872,34 @@ async function eliminarItemServidor(idx){
   Aviso.mostrar('Documento quitado del lote.', { duracion: 2200 });
 }
 
+// Copiloto de cuentas (ver /copiloto-cuentas.js): una consulta por factura
+// del lote cuyo proveedor o concepto el sistema todavía no conoce; se
+// aplica a los ítems no elegidos a mano y a la cuenta de la factura (si la
+// contadora no la cambió), y se repinta.
+let repintarPorCopiloto = null;
+function consultarCopilotoMasivo(item){
+  if (item._copilotoPedido || !item.clienteId || !item.data || typeof pedirCopilotoCuentas !== 'function') return;
+  if (item.estado !== 'listo' && item.estado !== 'revisar') return;
+  const puc = pucPersonalizadoPorCliente[item.clienteId];
+  if (!puc || puc.length === 0) return;
+  const d = item.data;
+  if (!Array.isArray(d.items) || !necesitaCopiloto(item.clienteId, d.nit_cc, d.items)) return;
+  item._copilotoPedido = true;
+  pedirCopilotoCuentas(item.clienteId, d).then((respuesta) => {
+    if (!aplicarCopilotoAItems(d.items, respuesta, item.clienteId)) return;
+    if (!item._subcuentaElegida && d.items[0] && d.items[0].subcuenta_gasto) {
+      d.subcuenta_gasto = d.items[0].subcuenta_gasto;
+      d._pucCliente = item.clienteId;
+    }
+    item._copilotoFuente = respuesta.fuente;
+    clearTimeout(repintarPorCopiloto);
+    repintarPorCopiloto = setTimeout(() => { renderSummary(); if (itemAbierto === item) renderItemsMiniPanel(item); }, 300);
+  });
+}
+
 function renderSummary(){
   summaryBody.innerHTML = '';
+  lote.forEach(consultarCopilotoMasivo);
   lote.forEach((item, idx) => {
     const card = document.createElement('div');
     card.className = 'factura-card';
@@ -2030,6 +2060,8 @@ function renderSummary(){
         ).join('')}</optgroup>` +
         `<optgroup label="Estándar (PUC)">${estandarOptsActualHTML}</optgroup>`) +
       `<option value="__manual__">✎ Escribir código a mano...</option>`;
+    const notaCopiloto = item._copilotoFuente && !item._subcuentaElegida
+      ? `<div class="it-copiloto">${escapeHtml(TEXTO_FUENTE_COPILOTO[item._copilotoFuente] || '')}</div>` : '';
     const subcuentaCampoHtml = (sinOpcionesSubcuenta || item._subcuentaManual)
       ? `<input type="text" data-idx="${idx}" data-role="subcuenta" placeholder="Código y nombre de la cuenta" value="${escapeHtml(d.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
       : `<select data-idx="${idx}" data-role="subcuenta">${subcuentaOpts}</select>`;
@@ -2096,7 +2128,7 @@ function renderSummary(){
       </div>
       <div class="fc-campos">
         <label class="fc-campo"><span>Categoría</span><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></label>
-        <label class="fc-campo"><span>Subcuenta (PUC)</span>${subcuentaCampoHtml}</label>
+        <label class="fc-campo"><span>Subcuenta (PUC)</span>${subcuentaCampoHtml}${notaCopiloto}</label>
         <label class="fc-campo"><span>N.° digitación</span><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></label>
         <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
       </div>
@@ -2130,6 +2162,7 @@ function renderSummary(){
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
           <div style="color:var(--warn);font-size:var(--t-13);">⚠ El sistema calcula una Rete Fuente de <b>$${retencionOlvidadaItem(item).bajo.toLocaleString('es-CO')}</b> para esta factura, pero quedó en $0.
             <button type="button" class="btn btn--sm" data-role="usar-retencion" data-idx="${idx}" style="margin-left:4px;">Usar $${retencionOlvidadaItem(item).bajo.toLocaleString('es-CO')} y guardar</button>
+            ${typeof selectorMotivoSinRetencionHtml === 'function' ? selectorMotivoSinRetencionHtml(`data-role="motivo-sin-retencion" data-idx="${idx}"`) : ''}
             <button type="button" class="btn ghost btn--sm" data-role="guardar-sin-retencion" data-idx="${idx}">Guardar sin retención</button></div>
         </div>
       ` : ''}
@@ -2419,7 +2452,7 @@ async function guardarFacturaIndividual(idx, btn, forzarSinNit, forzarLetras, fo
   renderSummary();
 }
 
-summaryBody.addEventListener('click', (e) => {
+summaryBody.addEventListener('click', async (e) => {
   const btnVer = e.target.closest('[data-role="ver"]');
   if (btnVer) {
     const idx = Number(btnVer.dataset.idx);
@@ -2491,6 +2524,21 @@ summaryBody.addEventListener('click', (e) => {
       guardarEdicionItem(item);
     } else {
       item.confirmoSinRetencion = true;
+      // Se recuerda el motivo para las próximas facturas de este proveedor
+      // (ver /motivo-sin-retencion.js).
+      const selector = summaryBody.querySelector(`[data-role="motivo-sin-retencion"][data-idx="${idx}"]`);
+      const motivo = selector ? selector.value : '';
+      if (motivo && motivo !== 'solo_esta_vez' && typeof registrarMotivoSinRetencion === 'function') {
+        const d = item.data;
+        let desglose = d.desglose_categorias;
+        if (typeof desglose === 'string') { try { desglose = JSON.parse(desglose || '{}'); } catch (err) { desglose = {}; } }
+        const categorias = Object.keys(desglose && typeof desglose === 'object' ? desglose : {});
+        let ok = true;
+        for (const categoria of (categorias.length > 0 ? categorias : [d.categoria_concepto].filter(Boolean))) {
+          ok = (await registrarMotivoSinRetencion({ nit: d.nit_cc, nombre: d.nombre_razon_social, categoria, motivo })) && ok;
+        }
+        Aviso.mostrar(ok ? `${d.nombre_razon_social || 'Proveedor'}: ${TEXTO_MOTIVO_SIN_RETENCION[motivo]}.` : 'No se pudo recordar el motivo; la factura igual se guarda.', ok ? {} : { tipo: 'error' });
+      }
     }
     guardarFacturaIndividual(idx, btnRetencion, false, false, false);
     return;
@@ -2605,6 +2653,9 @@ async function requireAuthAndInit(){
     try {
       const subRes = await fetch('/api/subcuentas-aprendidas');
       if (subRes.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await subRes.json());
+      // Cuentas usadas con cada proveedor y para qué (escoge por concepto).
+      const histRes = await fetch('/api/subcuentas-historial');
+      if (histRes.ok && typeof registrarHistorialSubcuentas === 'function') registrarHistorialSubcuentas(await histRes.json());
       const res383 = await fetch('/api/articulo-383-por-nit');
       if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
     } catch (e) {
