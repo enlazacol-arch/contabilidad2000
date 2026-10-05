@@ -88,10 +88,15 @@ function avisoPendientesHtml(clienteId) {
       ${ajenas.length ? `<span class="pend-nota">Las de ${escaparPendientes(ajenas.map((l) => l.usuario).join(' y '))} las termina quien las subió.</span>` : ''}</div>`);
   }
   if (p.borradores) {
-    lineas.push(`<div class="pend-secundaria">${p.borradores} guardada${p.borradores === 1 ? '' : 's'} sin aprobar. <a class="pend-link" href="/revision.html${qs}">Aprobar en Revisión →</a></div>`);
+    const n = p.borradores;
+    lineas.push(`<div${p.leidas_total ? ' class="pend-secundaria"' : ''}><b>${n} factura${n === 1 ? '' : 's'} guardada${n === 1 ? '' : 's'} sin aprobar.</b>
+      Mientras no ${n === 1 ? 'se apruebe' : 'se aprueben'}, no ${n === 1 ? 'cuenta' : 'cuentan'} en los totales, el kárdex ni los reportes de este cliente.
+      <a class="pend-link" href="/revision.html${qs}">Revisar y aprobar →</a></div>`);
   }
   if (!lineas.length) return '';
-  return `<div class="pend-aviso">${p.leidas_total ? '<div class="pend-titulo">Facturas sin guardar de este cliente</div>' : ''}${lineas.join('')}</div>`;
+  const titulo = p.leidas_total && p.borradores ? 'Pendientes de este cliente'
+    : p.leidas_total ? 'Facturas sin guardar de este cliente' : 'Facturas por aprobar de este cliente';
+  return `<div class="pend-aviso"><div class="pend-titulo">${titulo}</div>${lineas.join('')}</div>`;
 }
 
 (function estilosPendientes() {
