@@ -2303,6 +2303,37 @@ app.get('/api/subcuentas-aprendidas', requireAuth, async (req, res) => {
   }
 });
 
+// Historial de cuentas por proveedor y concepto: para cada cliente y
+// proveedor, cada subcuenta que se usó (facturas de egreso aprobadas de
+// los últimos 18 meses) con las descripciones de lo que se causó en ella.
+// Un mismo proveedor puede vender cosas de distinta naturaleza -- en la
+// contabilidad real de Bosques, GAMOEZ vendió en un mes aseo (51952501),
+// papelería (51953001) e insumos de piscina (51451022) -- y "la última
+// cuenta usada con ese proveedor" no basta. Ver subcuentaAprendida() en
+// public/retenciones.js, que escoge entre ellas por el texto del ítem.
+app.get('/api/subcuentas-historial', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto,
+              COUNT(*)::int AS veces, MAX(i.saved_at) AS ultima,
+              LEFT(STRING_AGG(DISTINCT fi.descripcion, ' | '), 2000) AS textos
+         FROM factura_items fi JOIN invoices i ON i.id = fi.invoice_id
+        WHERE i.contador_id = $1 AND i.tipo_movimiento = 'egreso' AND i.aprobado_por_contador = true
+          AND i.nit_cc <> '' AND fi.subcuenta_gasto <> '' AND fi.categoria_concepto <> ''
+          AND i.saved_at > now() - interval '18 months'
+        GROUP BY i.cliente_id, i.nit_cc, fi.categoria_concepto, fi.subcuenta_gasto`,
+      [req.firmaId]
+    );
+    res.json(rows
+      .filter((r) => !req.clientesAsignados || puedeAccederCliente(req, r.cliente_id))
+      .map((r) => ({ cliente_id: r.cliente_id, nit: normalizarNit(r.nit_cc), categoria: String(r.categoria_concepto).toLowerCase(),
+        subcuenta: r.subcuenta_gasto, veces: r.veces, ultima: r.ultima, textos: r.textos || '' })));
+  } catch (err) {
+    console.error('Error leyendo el historial de subcuentas:', err);
+    res.status(500).json({ error: 'No se pudo leer el historial de cuentas.' });
+  }
+});
+
 app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(

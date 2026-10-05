@@ -864,7 +864,7 @@ function ajustarItemsAlPucCliente(items, clienteId, textoFactura){
   (items || []).forEach((it) => {
     if (it._subcuentaManual || it._pucCliente === clienteId) return;
     if (it._subcuentaEstandar === undefined) it._subcuentaEstandar = it.subcuenta_gasto || '';
-    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(nit, it.categoria_concepto, clienteId) : '';
+    const aprendida = (typeof subcuentaAprendida === 'function') ? subcuentaAprendida(nit, it.categoria_concepto, clienteId, it.descripcion) : '';
     it.subcuenta_gasto = subcuentaParaCliente(puc, it.categoria_concepto, aprendida || it._subcuentaEstandar, `${it.descripcion || ''} ${textoFactura || ''}`);
     it._pucCliente = clienteId;
   });
@@ -941,6 +941,9 @@ async function loadSubcuentasAprendidas(){
   try {
     const res = await fetch('/api/subcuentas-aprendidas');
     if (res.ok && typeof registrarSubcuentasAprendidas === 'function') registrarSubcuentasAprendidas(await res.json());
+    // Cuentas usadas con cada proveedor y para qué (escoge por concepto).
+    const resHist = await fetch('/api/subcuentas-historial');
+    if (resHist.ok && typeof registrarHistorialSubcuentas === 'function') registrarHistorialSubcuentas(await resHist.json());
     const res383 = await fetch('/api/articulo-383-por-nit');
     if (res383.ok && typeof registrarNitsArticulo383 === 'function') registrarNitsArticulo383(await res383.json());
   } catch (e) {
