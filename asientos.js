@@ -202,6 +202,21 @@ function generarAsientoEgreso(invoice, items, opciones = {}) {
   // sacar el débito principal -- el contador tiene que elegirla primero.
   if (gastosPorCuenta.size === 0) return { error: 'sin_subcuenta_gasto' };
 
+  // Redondeo de los ítems: cada línea se lee en pesos enteros, y su suma
+  // puede quedar unos pesos arriba o abajo del subtotal de la factura (ej.
+  // GAMOEZ 39710: 13 ítems suman $619.538 y el subtotal es $619.534). Antes
+  // el asiento no cuadraba y no se proponía. Una diferencia pequeña (hasta
+  // $1 por ítem, mínimo $10) se ajusta en la cuenta de gasto más grande; una
+  // mayor es un error de lectura y el asiento sigue sin proponerse.
+  if (itemsConCategoria.length > 0) {
+    const sumaGastos = [...gastosPorCuenta.values()].reduce((s, g) => s + g.monto, 0);
+    const diferencia = round2(valorSinIva - sumaGastos);
+    if (diferencia !== 0 && Math.abs(diferencia) <= Math.max(10, itemsConCategoria.length)) {
+      const mayor = [...gastosPorCuenta.values()].sort((a, b) => b.monto - a.monto)[0];
+      mayor.monto += diferencia;
+    }
+  }
+
   // Cliente no responsable de IVA sin IVA por ítem (factura sin desglose,
   // o ítems sin IVA prorrateado): todo el IVA se reparte entre las
   // cuentas de gasto en proporción a su valor.
