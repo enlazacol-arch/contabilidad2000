@@ -938,8 +938,8 @@ let HISTORIAL_SUBCUENTAS = {};
 const RAICES_COMUNES_HISTORIAL = new Set(['PARA', 'CON', 'POR', 'LOS', 'LAS', 'DEL', 'UNID', 'COLO', 'TAMA', 'GRAN', 'PEQU']);
 function raicesHistorial(texto) {
   return new Set(String(texto || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter((p) => p.length >= 4).map((p) => p.slice(0, 4))
-    .filter((p) => !RAICES_COMUNES_HISTORIAL.has(p)));
+    .replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter((p) => p.length >= 4).map((p) => p.slice(0, 5))
+    .filter((p) => !RAICES_COMUNES_HISTORIAL.has(p.slice(0, 4))));
 }
 function registrarHistorialSubcuentas(filas) {
   HISTORIAL_SUBCUENTAS = {};
@@ -947,7 +947,11 @@ function registrarHistorialSubcuentas(filas) {
     const clave = `${String(f.nit || '').replace(/[^0-9]/g, '')}|${String(f.categoria || '').toLowerCase()}`;
     const entrada = { subcuenta: String(f.subcuenta || ''), raices: raicesHistorial(f.textos), veces: Number(f.veces) || 0, ultima: f.ultima ? new Date(f.ultima).getTime() : 0 };
     if (!entrada.subcuenta) return;
-    for (const k of [f.cliente_id ? `${f.cliente_id}|${clave}` : null, clave]) {
+    // También por concepto en TODO el cliente, sin importar el proveedor
+    // ("${cliente}|*|categoria"): en Bosques los bombillos van a 51451011
+    // y los parqueaderos a 519565, venga de quien venga la factura.
+    const claveCliente = f.cliente_id ? `${f.cliente_id}|*|${String(f.categoria || '').toLowerCase()}` : null;
+    for (const k of [f.cliente_id ? `${f.cliente_id}|${clave}` : null, clave, claveCliente]) {
       if (!k) continue;
       const lista = HISTORIAL_SUBCUENTAS[k] = HISTORIAL_SUBCUENTAS[k] || [];
       const existente = lista.find((e) => e.subcuenta === entrada.subcuenta);
@@ -966,8 +970,8 @@ function registrarHistorialSubcuentas(filas) {
 // parece al texto del ítem (palabras en común con lo que se causó antes
 // en cada cuenta; las palabras que aparecen en TODAS no distinguen nada).
 // '' si no hay varias cuentas o ninguna se parece.
-function subcuentaPorHistorial(lista, texto) {
-  if (!Array.isArray(lista) || lista.length < 2 || !texto) return '';
+function subcuentaPorHistorial(lista, texto, minimoCuentas = 2) {
+  if (!Array.isArray(lista) || lista.length < minimoCuentas || !texto) return '';
   const delTexto = raicesHistorial(texto);
   const enTodas = new Set([...lista[0].raices].filter((r) => lista.every((e) => e.raices.has(r))));
   let mejor = null, mejorPuntaje = 0;
@@ -993,7 +997,12 @@ function subcuentaAprendida(nit, categoria, clienteId, texto) {
   const clave = `${nitLimpio}|${String(categoria).toLowerCase()}`;
   const porConcepto = subcuentaPorHistorial((clienteId && HISTORIAL_SUBCUENTAS[`${clienteId}|${clave}`]) || HISTORIAL_SUBCUENTAS[clave], texto);
   if (porConcepto) return porConcepto;
-  return (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
+  const delProveedor = (clienteId && SUBCUENTAS_APRENDIDAS[`${clienteId}|${clave}`]) || SUBCUENTAS_APRENDIDAS[clave] || '';
+  if (delProveedor) return delProveedor;
+  // Proveedor nuevo para este cliente: lo que el cliente ya causó con un
+  // concepto parecido, de cualquier proveedor (basta una cuenta que se
+  // parezca al texto).
+  return clienteId ? subcuentaPorHistorial(HISTORIAL_SUBCUENTAS[`${clienteId}|*|${String(categoria).toLowerCase()}`], texto, 1) : '';
 }
 
 // ---------- AIU consolidado (vigilancia, aseo, temporales) ----------
