@@ -4722,6 +4722,53 @@ app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'co
   }
 });
 
+// La contadora guardó una factura SIN la retención que el sistema
+// proponía, y dijo por qué. En la prueba con la contabilidad real de
+// Bosques (julio), 7 de 25 facturas iban sin retención por criterio de la
+// contadora (autorretenedores, Régimen Simple, Art. 383...), y el sistema
+// la seguía proponiendo cada mes: un "sin retención" no se aprendía.
+// Aquí se recuerda según el motivo:
+//   autorretenedor / regimen_simple / articulo_383 -> marca en el perfil
+//     fiscal del proveedor (sin tocar las demás marcas que ya tuviera);
+//   no_retener -> tarifa aprendida 0 para ese proveedor en esa categoría;
+//   solo_esta_vez -> nada.
+const MOTIVOS_SIN_RETENCION = {
+  autorretenedor: 'autorretenedor',
+  regimen_simple: 'regimen_simple',
+  articulo_383: 'aplica_articulo_383',
+};
+app.post('/api/proveedores/motivo-sin-retencion', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const nit = normalizarNit(req.body.nit);
+    const motivo = String(req.body.motivo || '');
+    const categoria = String(req.body.categoria || '').trim().toLowerCase();
+    const nombre = String(req.body.nombre || '').trim().slice(0, 200);
+    if (!nit) return res.status(400).json({ error: 'Falta el NIT del proveedor.' });
+    if (motivo === 'solo_esta_vez') return res.json({ ok: true });
+    const columna = MOTIVOS_SIN_RETENCION[motivo];
+    if (columna) {
+      const { rows } = await pool.query(
+        `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, ${columna})
+         VALUES ($1, $2, $3, $4, true)
+         ON CONFLICT (contador_id, nit) DO UPDATE SET ${columna} = true,
+           nombre = COALESCE(NULLIF(EXCLUDED.nombre, ''), terceros_fiscales.nombre), updated_at = now()
+         RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, aplica_articulo_383, notas, updated_at`,
+        [crypto.randomUUID(), req.firmaId, nit, nombre]
+      );
+      return res.json({ ok: true, perfil: rows[0] });
+    }
+    if (motivo === 'no_retener') {
+      if (!TARIFAS_RETENCION[categoria]) return res.status(400).json({ error: 'Categoría de retención no válida.' });
+      await guardarTarifaProveedor(req.firmaId, nit, categoria, 0);
+      return res.json({ ok: true, tarifa: { nit_proveedor: nit, categoria, tarifa: 0 } });
+    }
+    res.status(400).json({ error: 'Motivo no válido.' });
+  } catch (err) {
+    console.error('Error guardando el motivo sin retención:', err);
+    res.status(500).json({ error: 'No se pudo guardar el motivo.' });
+  }
+});
+
 app.delete('/api/terceros-fiscales/:nit', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const nit = normalizarNit(req.params.nit);
