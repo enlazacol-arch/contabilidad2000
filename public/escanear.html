@@ -1369,7 +1369,7 @@ function agregarCapturasACola(files){
 function textoBadgeCaptura(estado){
   const textos = {
     pendiente: '⏳ En espera', leyendo: '⏳ Leyendo…', lista: '✓ Lista para revisar',
-    error: '✕ Error', duplicado: '📋 Ya existe', paquete: '📎 Varios documentos', guardada: '✓ Guardada',
+    error: '✕ Error', duplicado: '📋 Ya existe', guardada: '✓ Guardada',
   };
   return `<span class="ci-badge ${estado}">${textos[estado] || estado}</span>`;
 }
@@ -1538,8 +1538,6 @@ function actualizarEstadoAbierta(){
     renderResult(entry.data);
   } else if (entry.estado === 'duplicado') {
     renderDuplicado(entry.data.factura_existente);
-  } else if (entry.estado === 'paquete') {
-    renderPaqueteDetectado(entry.paquete.totalFacturas, entry.paquete.totalOtros);
   } else if (entry.estado === 'error') {
     errEl.textContent = 'No se pudo leer la factura: ' + entry.errorMsg;
     errEl.classList.add('show');
@@ -1664,7 +1662,9 @@ function detenerContadorLectura(){
 // devuelve exactamente lo mismo que /api/extract habría dado),
 // /api/extract directo para fotos, como siempre.
 async function llamarApiExtractUnaVezPara(entry, forzar){
-  const endpoint = entry.isPdf ? '/api/extract-paquete' : '/api/extract';
+  // Fotos y PDF van a la ruta que separa varios documentos de un mismo
+  // archivo (ej. tres facturas en una sola foto).
+  const endpoint = '/api/extract-paquete';
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1724,46 +1724,48 @@ async function llamarApiExtractConReintentoPara(entry, forzar){
 // importar cómo haya salido esta.
 async function leerCaptura(entry, forzar){
   try {
-    let data = await llamarApiExtractConReintentoPara(entry, forzar);
-
-    if (entry.isPdf) {
-      const facturas = Array.isArray(data.facturas) ? data.facturas : [];
-      const otros = Array.isArray(data.otros_grupos) ? data.otros_grupos : [];
-
-      // Este PDF trae más de un documento -- Escanear muestra un solo
-      // formulario a la vez, así que no tiene sentido intentar mostrar
-      // varios acá. Se avisa y se manda al contador a Carga masiva, que
-      // sí está construida para revisar varios documentos de un tirón.
-      if (facturas.length + otros.length > 1) {
-        return { estado: 'paquete', paquete: { totalFacturas: facturas.length, totalOtros: otros.length } };
-      }
-
-      if (facturas.length === 0) {
-        // Solo se encontró un grupo "no facturable" (ej. subieron
-        // únicamente un extracto bancario) -- no hay nada que leer aquí.
-        const grupo = otros[0];
-        return {
-          estado: 'error',
-          errorMsg: `Este archivo parece ser ${grupo?.tipo === 'extracto_bancario' ? 'un extracto bancario' : 'un documento sin identificar'}${grupo?.descripcion_breve ? ` (${grupo.descripcion_breve})` : ''}, no una factura ni cuenta de cobro.`,
-        };
-      }
-
-      // Un solo documento causable -- se desenvuelve y sigue el mismo
-      // camino de siempre, como si hubiera venido de /api/extract.
-      data = facturas[0];
-      if (data.error) {
-        return { estado: 'error', errorMsg: data.mensaje || 'Este documento no parece ser una factura ni cuenta de cobro.' };
-      }
+    const respuesta = await llamarApiExtractConReintentoPara(entry, forzar);
+    const facturas = Array.isArray(respuesta.facturas) ? respuesta.facturas : [];
+    if (facturas.length === 0) {
+      return { estado: 'error', errorMsg: 'No se identificó ninguna factura en este archivo. Intenta con una foto más clara.' };
     }
 
-    if (data.duplicado) {
-      return { estado: 'duplicado', data, fileHash: data.file_hash || '' };
+    // Varios documentos en el mismo archivo (ej. tres facturas en una
+    // foto, o un PDF con varias): esta captura se queda con el primero y
+    // cada uno de los demás entra a la lista como su propia factura, con
+    // la misma imagen, para revisarla y guardarla aparte.
+    if (facturas.length > 1) {
+      const posicion = colaCapturas.indexOf(entry);
+      const nuevas = facturas.slice(1).map((doc, i) => ({
+        id: siguienteCapturaId++,
+        nombre: `${entry.nombre} (${i + 2} de ${facturas.length})`,
+        tamano: entry.tamano,
+        isPdf: entry.isPdf,
+        base64: entry.base64,
+        mediaType: entry.mediaType,
+        errorMsg: '',
+        fileHash: '',
+        paquete: null,
+        data: null,
+        ...resultadoDeDocumentoLeido(doc),
+      }));
+      colaCapturas.splice(posicion + 1, 0, ...nuevas);
+      nuevas.forEach((n) => guardarCapturaEnDB(n));
+      entry.nombre = `${entry.nombre} (1 de ${facturas.length})`;
     }
-
-    return { estado: 'lista', data, fileHash: data.file_hash || '' };
+    return resultadoDeDocumentoLeido(facturas[0]);
   } catch (e) {
     return { estado: 'error', errorMsg: e.message };
   }
+}
+
+// Estado de una captura según lo que devolvió la IA para UN documento.
+function resultadoDeDocumentoLeido(data){
+  if (!data || data.error) {
+    return { estado: 'error', errorMsg: (data && data.mensaje) || 'Este documento no parece ser una factura ni cuenta de cobro.' };
+  }
+  if (data.duplicado) return { estado: 'duplicado', data, fileHash: data.file_hash || '' };
+  return { estado: 'lista', data, fileHash: data.file_hash || '' };
 }
 
 // Se muestra en vez del formulario de resultado cuando este archivo
@@ -1794,33 +1796,6 @@ function renderDuplicado(existente){
 
   document.getElementById('btnLeerDeTodasFormas').addEventListener('click', () => reintentarCapturaAbierta(true));
   document.getElementById('btnOtroArchivo').addEventListener('click', resetAll);
-}
-
-// Se muestra en vez del formulario de resultado cuando el PDF subido
-// trae VARIOS documentos concatenados (un "paquete de legalización":
-// extracto bancario + varios comprobantes con soporte, todo en el mismo
-// archivo) -- Escanear solo puede mostrar un formulario a la vez, así
-// que en vez de intentar leerlo aquí se manda al contador a Carga
-// masiva, que sí revisa y guarda varios documentos de un tirón.
-function renderPaqueteDetectado(totalFacturas, totalOtros){
-  const partes = [];
-  if (totalFacturas > 0) partes.push(`${totalFacturas} factura${totalFacturas === 1 ? '' : 's'}/cuenta${totalFacturas === 1 ? '' : 's'} de cobro`);
-  if (totalOtros > 0) partes.push(`${totalOtros} documento${totalOtros === 1 ? '' : 's'} aparte (ej. extracto bancario)`);
-
-  dupWarnEl.innerHTML = `
-    <b>📎 Este PDF trae varios documentos en el mismo archivo</b>
-    Se detectó: ${escapeHtml(partes.join(' y '))}. Escanear solo puede revisar un documento a la vez -- sube este mismo
-    archivo en <b style="display:inline;color:inherit;">Carga masiva</b> y se separa y se muestra cada uno por su lado,
-    listo para revisar y guardar.
-    <div class="dup-actions">
-      <button type="button" id="btnIrCargaMasiva">Ir a Carga masiva</button>
-      <button type="button" id="btnOtroArchivoPaquete">Subir otro archivo</button>
-    </div>
-  `;
-  dupWarnEl.classList.add('show');
-
-  document.getElementById('btnIrCargaMasiva').addEventListener('click', () => { window.location.href = 'masivo.html'; });
-  document.getElementById('btnOtroArchivoPaquete').addEventListener('click', resetAll);
 }
 
 function renderResult(data){

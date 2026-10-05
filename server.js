@@ -3701,7 +3701,7 @@ const INVOICE_PROMPT_VERSION = 'v3';
 // documento no se lea distinto solo por venir acompañado de otros --
 // lo único que cambia es que primero hay que SEGMENTAR el archivo en
 // documentos individuales, y devolver un arreglo con uno por cada uno.
-const PAQUETE_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un archivo (normalmente un PDF) que puede traer UN SOLO documento (el caso más común, incluso si ocupa varias páginas) o VARIOS documentos distintos concatenados uno tras otro en el mismo archivo -- por ejemplo, varias facturas de proveedores distintos escaneadas y unidas en un solo PDF, o una factura seguida de un extracto bancario o de otros soportes.
+const PAQUETE_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un archivo (un PDF o una FOTO) que puede traer UN SOLO documento (el caso más común, incluso si ocupa varias páginas) o VARIOS documentos distintos -- por ejemplo, varias facturas de proveedores distintos escaneadas y unidas en un solo PDF, una factura seguida de un extracto bancario o de otros soportes, o una FOTO en la que se ven varios documentos a la vez sobre la mesa (ej. tres tiquetes POS o tres facturas pequeñas uno al lado del otro, o una factura con su comprobante de pago al lado).
 
 Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos hay en realidad, antes de extraer ningún dato. Usa estas señales para saber cuándo empieza un documento NUEVO (no bases el corte solo en el número de página):
 - Aparece un encabezado o membrete distinto (otro logo, otro nombre de empresa emisora).
@@ -3709,6 +3709,8 @@ Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos 
 - Aparece un nuevo consecutivo de factura, CUFE, o número de "Cuenta de Cobro" distinto.
 - Aparece una nueva fecha de emisión y un nuevo total a pagar, sin que el documento anterior haya seguido en esa misma página con más ítems de la misma factura.
 - Cambia el TIPO de documento (ej. termina una factura y empieza un extracto bancario o un comprobante de pago).
+
+En una FOTO, cada documento es un papel físico distinto: bordes de papel separados, cada uno con su propio emisor, número y total. Léelos uno por uno, de izquierda a derecha y de arriba abajo, sin mezclar los valores de un papel con los de otro. Un solo papel fotografiado (aunque se vea torcido, doblado o con sombras) es UN solo documento.
 
 NO cortes un documento en varios solo porque tenga varias páginas: una factura de dos o tres páginas donde la tabla de ítems continúa de una página a la siguiente (mismo emisor, mismo consecutivo, mismo total) sigue siendo UN SOLO documento. La gran mayoría de los archivos que vas a recibir traen un solo documento -- solo segmenta en varios cuando de verdad encuentres las señales de arriba.
 
@@ -3725,7 +3727,7 @@ Incluye en el arreglo TANTO los documentos válidos (factura de venta, cuenta de
 Devuelve SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks, con esta forma exacta:
 
 {
-  "documentos": [ /* un elemento con la forma de arriba por cada documento distinto que identificaste, EN EL MISMO ORDEN en que aparecen en el archivo (de principio a fin) */ ]
+  "documentos": [ /* un elemento con la forma de arriba por cada documento distinto que identificaste, EN EL MISMO ORDEN en que aparecen en el archivo (de principio a fin; en una foto, de izquierda a derecha y de arriba abajo) */ ]
 }
 
 Si el archivo trae un solo documento (el caso más frecuente), "documentos" debe tener exactamente un elemento.
@@ -4091,8 +4093,8 @@ app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {
   }
 });
 
-// Escanear sube un PDF a esta ruta (en vez de /api/extract) porque un
-// PDF puede en teoría venir con varios documentos concatenados (un
+// Escanear sube fotos y PDF a esta ruta (en vez de /api/extract) porque
+// un archivo puede venir con varios documentos (un
 // extracto bancario seguido de varios soportes, por ejemplo) -- el
 // frontend está preparado para recibir `{ facturas: [...], otros_grupos:
 // [...] }` y avisar si detecta más de un documento en el archivo.
@@ -4117,13 +4119,8 @@ app.post('/api/extract-paquete', requireAuth, limitadorIA, async (req, res) => {
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
   try {
-    if (!isPdf) {
-      // Una foto es siempre un solo documento -- no hace falta gastar
-      // el prompt (más largo) de segmentación de paquete.
-      const parsed = await procesarExtraccionFactura(req.firmaId, base64, effectiveMediaType, isPdf, forzar);
-      return res.json({ facturas: [parsed], otros_grupos: [] });
-    }
-
+    // Fotos y PDF por igual: una foto puede traer varios documentos
+    // (ej. tres facturas pequeñas o tiquetes POS sobre la mesa).
     const { documentos } = await procesarPaqueteDocumento(req.firmaId, base64, effectiveMediaType, forzar);
     const facturas = documentos.map((doc) => (doc.tipo === 'factura' ? doc.data : { error: true, mensaje: doc.mensaje }));
     res.json({ facturas, otros_grupos: [] });

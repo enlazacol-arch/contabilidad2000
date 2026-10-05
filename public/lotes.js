@@ -219,30 +219,11 @@ async function eliminarItem(itemId, contadorId) {
   );
 }
 
-// Igual que en el navegador: si la IA rechaza el documento a propósito
-// (422 -- no es factura ni cuenta de cobro), reintentar no cambia nada,
-// así que no se reintenta solo. Si el error parece técnico (sin
-// conexión con Gemini, un 500/503 momentáneo), sí vale la pena
-// reintentar unas pocas veces antes de darse por vencido.
-async function procesarExtraccionConReintento(contadorId, base64, mediaType, esPdf, forzar) {
-  const MAX_INTENTOS = 3;
-  const ESPERA_MS = 1500;
-  let ultimoError;
-  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-    try {
-      return await procesarExtraccionFactura(contadorId, base64, mediaType, esPdf, forzar);
-    } catch (err) {
-      ultimoError = err;
-      if (err.status === 422) throw err;
-      if (intento < MAX_INTENTOS) await new Promise((r) => setTimeout(r, ESPERA_MS));
-    }
-  }
-  throw ultimoError;
-}
-
-// Igual que procesarExtraccionConReintento, pero para el prompt de
-// paquete (puede traer varios documentos) -- ver procesarPaqueteDocumento
-// en server.js.
+// Lee un archivo con el prompt de paquete (puede traer varios
+// documentos) -- ver procesarPaqueteDocumento en server.js. Si la IA lo
+// rechaza a propósito (422 -- no es factura ni cuenta de cobro),
+// reintentar no cambia nada; si el error parece técnico (sin conexión
+// con Gemini, un 500/503 momentáneo), se reintenta unas pocas veces.
 async function procesarPaqueteConReintento(contadorId, base64, mediaType, forzar) {
   const MAX_INTENTOS = 3;
   const ESPERA_MS = 1500;
@@ -316,15 +297,10 @@ async function procesarUnItem(item, contadorId) {
   } catch (e) { /* data no era la marca de reintento, se ignora */ }
 
   try {
-    if (!item.es_pdf) {
-      // Una foto es siempre un solo documento -- mismo camino de
-      // siempre, sin pasar por el prompt de segmentación de paquete.
-      const parsed = await procesarExtraccionConReintento(contadorId, item.base64, item.media_type, false, forzar);
-      await guardarResultadoDocumento(item.id, contadorId, { tipo: 'factura', data: parsed });
-      return;
-    }
-
-    const { documentos } = await procesarPaqueteConReintento(contadorId, item.base64, 'application/pdf', forzar);
+    // PDF o foto pasan por la segmentación: una foto también puede traer
+    // varios documentos (ej. tres tiquetes POS sobre la mesa), y cada uno
+    // queda como su propia fila para revisar.
+    const { documentos } = await procesarPaqueteConReintento(contadorId, item.base64, item.es_pdf ? 'application/pdf' : item.media_type, forzar);
 
     // Este ítem YA sabe en qué posición del archivo original vive (se
     // le marcó la primera vez que se procesó, ver más abajo) -- eso
@@ -363,8 +339,8 @@ async function procesarUnItem(item, contadorId) {
       const nombreConSufijo = `${item.nombre_archivo} (documento ${i + 1} de ${documentos.length})`;
       await pool.query(
         `INSERT INTO lote_items (id, lote_id, orden, nombre_archivo, base64, media_type, es_pdf, estado, documento_indice)
-         VALUES ($1, $2, $3, $4, $5, $6, true, 'procesando', $7)`,
-        [nuevoId, item.lote_id, item.orden, nombreConSufijo, item.base64, item.media_type, i]
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'procesando', $8)`,
+        [nuevoId, item.lote_id, item.orden, nombreConSufijo, item.base64, item.media_type, !!item.es_pdf, i]
       );
       await guardarResultadoDocumento(nuevoId, contadorId, documentos[i]);
       await pool.query(
