@@ -615,9 +615,12 @@ function renderAsientoSeccion(inv){
   const lineas = asientoActual.lineas || [];
   const debe = lineas.reduce((s, l) => s + Number(l.debito), 0);
   const haber = lineas.reduce((s, l) => s + Number(l.credito), 0);
+  // Las cuentas del plan propio del cliente se marcan, para distinguirlas
+  // de las del PUC estándar de Enlaza.
+  const hayCuentasCliente = lineas.some((l) => l.cuenta_cliente);
   const filas = lineas.map((l) => `<tr>
     <td>${escapeHtml(l.cuenta_codigo)}</td>
-    <td>${escapeHtml(l.cuenta_nombre)}</td>
+    <td>${escapeHtml(l.cuenta_nombre)}${l.cuenta_cliente ? ' <span class="badge badge--info" title="Cuenta del plan de cuentas propio del cliente">PUC cliente</span>' : ''}</td>
     <td class="num">${Number(l.debito) ? formatCOP(l.debito) : ''}</td>
     <td class="num">${Number(l.credito) ? formatCOP(l.credito) : ''}</td>
   </tr>`).join('');
@@ -636,6 +639,7 @@ function renderAsientoSeccion(inv){
       <tbody>${filas}</tbody>
       <tfoot><tr><td colspan="2">Total</td><td class="num">${formatCOP(debe)}</td><td class="num">${formatCOP(haber)}</td></tr></tfoot>
     </table>
+    ${hayCuentasCliente ? '<p style="margin:8px 0 0; font-size:var(--t-12); color:var(--ink-faint);">Las cuentas marcadas «PUC cliente» son del plan de cuentas propio del cliente (ficha del cliente).</p>' : ''}
   </div>`;
 }
 

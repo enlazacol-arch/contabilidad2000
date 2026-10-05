@@ -687,6 +687,9 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_asiento_lineas_asiento ON asiento_lineas (asiento_id);`);
+  // La cuenta de la línea es del plan propio del cliente (ver
+  // puc_personalizado_cliente), para marcarla así en pantalla.
+  await pool.query(`ALTER TABLE asiento_lineas ADD COLUMN IF NOT EXISTS cuenta_cliente BOOLEAN NOT NULL DEFAULT false;`);
 
   // ---------- Confianza de la IA + aprobación del contador (Fase 2) ----------
   // `confianza_campos`: JSON (guardado como TEXT, igual que
@@ -1531,10 +1534,27 @@ async function asegurarPlanCuentasContador(contadorId) {
 async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
   try {
     const itemsRes = await pool.query(
-      'SELECT categoria_concepto, subcuenta_gasto, subtotal FROM factura_items WHERE invoice_id = $1 ORDER BY orden',
+      'SELECT categoria_concepto, subcuenta_gasto, subtotal, valor_iva, iva_mayor_valor FROM factura_items WHERE invoice_id = $1 ORDER BY orden',
       [invoiceRow.id]
     );
-    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows);
+    // Plan de cuentas propio del cliente y si es responsable de IVA: el
+    // asiento usa sus cuentas (nombres, auxiliar de retención por tarifa,
+    // cuentas "IVA ..." al gasto). Sin plan propio, el PUC estándar.
+    let pucDelCliente = [];
+    let ivaMayorValorGasto = false;
+    if (invoiceRow.cliente_id) {
+      const [pucRes, cliRes] = await Promise.all([
+        pool.query(
+          `SELECT codigo, concepto, categoria_concepto, recibe_movimiento, activo, porcentaje FROM puc_personalizado_cliente
+           WHERE contador_id = $1 AND cliente_id = $2`,
+          [contadorId, invoiceRow.cliente_id]
+        ),
+        pool.query('SELECT iva_mayor_valor_gasto FROM clients WHERE id = $1 AND contador_id = $2', [invoiceRow.cliente_id, contadorId]),
+      ]);
+      pucDelCliente = pucRes.rows.map((r) => ({ ...r, porcentaje: r.porcentaje === null ? null : Number(r.porcentaje) }));
+      ivaMayorValorGasto = !!(cliRes.rows[0] && cliRes.rows[0].iva_mayor_valor_gasto);
+    }
+    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows, { pucCliente: pucDelCliente, ivaMayorValorGasto });
     if (resultado.error) {
       // No es un error del guardado de la factura -- solo significa que
       // todavía no hay suficiente información (o que es una factura de
@@ -1578,9 +1598,9 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
 
     for (const linea of resultado.lineas) {
       await pool.query(
-        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [crypto.randomUUID(), asientoId, linea.orden, linea.cuenta_codigo, linea.cuenta_nombre, linea.debito, linea.credito]
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [crypto.randomUUID(), asientoId, linea.orden, linea.cuenta_codigo, linea.cuenta_nombre, linea.debito, linea.credito, !!linea.cuenta_cliente]
       );
     }
   } catch (err) {
@@ -3115,7 +3135,7 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
       }
     }
     const lineas = await pool.query(
-      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
       [req.params.id]
     );
     res.json({ ...cabecera.rows[0], lineas: lineas.rows });
@@ -3204,13 +3224,22 @@ app.put('/api/asientos/:id/lineas', requireAuth, requireRole('administrador', 'c
       }
     }
 
+    // Qué códigos son del plan propio del cliente de la factura (para
+    // seguir marcándolos así después de editar a mano).
+    const codigosDelCliente = new Set((await pool.query(
+      `SELECT p.codigo FROM puc_personalizado_cliente p JOIN invoices i ON i.cliente_id = p.cliente_id
+        WHERE i.id = $1 AND p.contador_id = $2`,
+      [asiento.rows[0].invoice_id, req.firmaId]
+    )).rows.map((r) => r.codigo));
+
     await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [req.params.id]);
     let orden = 0;
     for (const l of lineasBody) {
+      const codigo = String(l.cuenta_codigo).trim();
       await pool.query(
-        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [crypto.randomUUID(), req.params.id, orden++, String(l.cuenta_codigo).trim(), String(l.cuenta_nombre || '').trim(), Number(l.debito) || 0, Number(l.credito) || 0]
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [crypto.randomUUID(), req.params.id, orden++, codigo, String(l.cuenta_nombre || '').trim(), Number(l.debito) || 0, Number(l.credito) || 0, codigosDelCliente.has(codigo)]
       );
     }
     // Deja constancia de que un humano tocó las líneas directamente --
@@ -3218,7 +3247,7 @@ app.put('/api/asientos/:id/lineas', requireAuth, requireRole('administrador', 'c
     await pool.query(`UPDATE asientos_contables SET generado_por = 'contador' WHERE id = $1`, [req.params.id]);
 
     const lineasFinal = await pool.query(
-      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito, cuenta_cliente FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
       [req.params.id]
     );
     // Si la factura ya estaba aprobada (lo normal es corregir el asiento

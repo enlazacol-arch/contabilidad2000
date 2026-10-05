@@ -235,3 +235,68 @@ test('PLAN_CUENTAS_SEMILLA: toda cuenta trae una naturaleza válida (debito o cr
     assert.ok(['debito', 'credito'].includes(cuenta.naturaleza), `naturaleza inválida en ${cuenta.codigo}: ${cuenta.naturaleza}`);
   }
 });
+
+// ---------- con el plan de cuentas propio del cliente ----------
+
+const cuentaCli = (codigo, concepto, extra = {}) => ({ codigo, concepto, categoria_concepto: '', activo: true, recibe_movimiento: true, porcentaje: null, ...extra });
+const PLAN_CLIENTE = [
+  cuentaCli('513507', 'VIGILANCIA'),
+  cuentaCli('513508', 'IVA VIGILANCIA'),
+  cuentaCli('51451006', 'MANTENIMIENTO PUERTAS'),
+  cuentaCli('51451002', 'IVA MTTO'),
+  cuentaCli('236525', 'RF x P SERVICIOS', { recibe_movimiento: false }),
+  cuentaCli('23652501', 'RETEFTE SERVICIOS 2%', { porcentaje: 2 }),
+  cuentaCli('23652502', 'RETEFTE SERVICIOS 4%', { porcentaje: 4 }),
+  cuentaCli('24081001', 'IVA DESCONTADOS'),
+];
+const facturaServicio = {
+  tipo_movimiento: 'egreso', categoria_concepto: 'servicios',
+  valor_sin_iva: '1000000', valor_iva: '190000', valor_con_iva: '1190000', rete_fuente: '40000',
+};
+const lineaDe = (r, codigo) => r.lineas.find((l) => l.cuenta_codigo === codigo);
+
+test('asiento con plan del cliente: nombres del cliente y retención al auxiliar de la tarifa (4%)', () => {
+  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '51451006', subtotal: '1000000', valor_iva: '190000' }], { pucCliente: PLAN_CLIENTE });
+  assert.equal(r.error, undefined);
+  assert.equal(lineaDe(r, '51451006').cuenta_nombre, 'MANTENIMIENTO PUERTAS');
+  assert.equal(lineaDe(r, '51451006').cuenta_cliente, true);
+  assert.equal(lineaDe(r, '23652502').credito, 40000);
+  assert.equal(lineaDe(r, '24081001').debito, 190000, 'IVA descontable al auxiliar del cliente');
+  assert.equal(r.debe, r.haber);
+});
+
+test('asiento: cliente no responsable de IVA -> el IVA va a su cuenta "IVA ..." del gasto, nada a la 2408', () => {
+  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '51451006', subtotal: '1000000', valor_iva: '190000' }], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true });
+  assert.equal(lineaDe(r, '51451002').debito, 190000);
+  assert.ok(!r.lineas.some((l) => l.cuenta_codigo.startsWith('2408')));
+  assert.equal(r.debe, r.haber);
+});
+
+test('asiento: no responsable de IVA sin cuenta "IVA ..." -> el IVA se suma al gasto', () => {
+  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '513595', subtotal: '1000000', valor_iva: '190000' }], { ivaMayorValorGasto: true });
+  assert.equal(lineaDe(r, '513595').debito, 1190000);
+  assert.ok(!lineaDe(r, '2408'));
+});
+
+test('asiento: no responsable de IVA, factura sin ítems -> el IVA se reparte al gasto de la cabecera', () => {
+  const r = generarAsientoEgreso({ ...facturaServicio, subcuenta_gasto: '513507', categoria_concepto: 'vigilancia_aseo', rete_fuente: '0' }, [], { pucCliente: PLAN_CLIENTE, ivaMayorValorGasto: true });
+  assert.equal(lineaDe(r, '513507').debito, 1000000);
+  assert.equal(lineaDe(r, '513508').debito, 190000);
+});
+
+test('asiento: ítem marcado "IVA mayor valor" en un cliente responsable -> solo ese IVA al gasto', () => {
+  const r = generarAsientoEgreso(facturaServicio, [
+    { categoria_concepto: 'servicios', subcuenta_gasto: '513595', subtotal: '600000', valor_iva: '114000', iva_mayor_valor: true },
+    { categoria_concepto: 'servicios', subcuenta_gasto: '514510', subtotal: '400000', valor_iva: '76000', iva_mayor_valor: false },
+  ]);
+  assert.equal(lineaDe(r, '513595').debito, 714000);
+  assert.equal(lineaDe(r, '2408').debito, 76000);
+  assert.equal(r.debe, r.haber);
+});
+
+test('asiento sin plan del cliente: igual que antes (2408 y 236525)', () => {
+  const r = generarAsientoEgreso(facturaServicio, [{ categoria_concepto: 'servicios', subcuenta_gasto: '514510', subtotal: '1000000', valor_iva: '190000' }]);
+  assert.equal(lineaDe(r, '2408').debito, 190000);
+  assert.equal(lineaDe(r, '236525').credito, 40000);
+  assert.equal(lineaDe(r, '236525').cuenta_cliente, false);
+});

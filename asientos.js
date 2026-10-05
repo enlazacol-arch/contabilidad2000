@@ -35,6 +35,12 @@ const {
   CUENTAS_PUC_FIJAS,
   SUBCUENTAS_GASTO,
 } = require('./public/retenciones');
+const {
+  nombreCuentaCliente,
+  cuentaRetencionCliente,
+  cuentaIvaGastoCliente,
+  cuentaUsable,
+} = require('./public/puc-cliente');
 
 // ---------- Plan de cuentas semilla ----------
 //
@@ -121,14 +127,32 @@ function codigoCuentaGasto(subcuentaGasto) {
 // nombres de campo).
 // `items`: las filas de factura_items de esa factura (arreglo, puede
 // venir vacío si la factura no tiene desglose línea por línea).
+// `opciones` (todo opcional):
+//   pucCliente: el plan de cuentas propio del cliente (ver
+//     public/puc-cliente.js). Con él, las cuentas llevan el NOMBRE del
+//     plan del cliente, la retención va a su auxiliar de la tarifa
+//     aplicada (ej. 23652502 "RETEFTE SERVICIOS 4%") y el IVA llevado al
+//     gasto va a su cuenta "IVA ..." cuando la tiene.
+//   ivaMayorValorGasto: el cliente NO es responsable de IVA -- todo el
+//     IVA es mayor valor del gasto, nada va a la 2408.
 //
 // Devuelve { lineas, debe, haber } si se pudo generar, o
 // { error: 'motivo' } si falta algo -- nunca lanza, y nunca devuelve un
 // asiento que no cuadre (debe === haber siempre que no haya error).
-function generarAsientoEgreso(invoice, items) {
+// Cada línea trae `cuenta_cliente: true` si la cuenta es del plan propio
+// del cliente.
+function generarAsientoEgreso(invoice, items, opciones = {}) {
   if (String(invoice.tipo_movimiento || '').toLowerCase() !== 'egreso') {
     return { error: 'no_es_egreso' };
   }
+  const puc = Array.isArray(opciones.pucCliente) ? opciones.pucCliente : [];
+  const delCliente = (codigo) => puc.some((c) => String(c.codigo) === String(codigo));
+  const nombreDe = (codigo, porDefecto) => {
+    const propio = nombreCuentaCliente(puc, codigo);
+    if (propio) return propio;
+    const cuenta = PLAN_CUENTAS_SEMILLA.find((c) => c.codigo === codigo);
+    return cuenta ? cuenta.nombre : (porDefecto || codigo);
+  };
 
   const valorSinIva = Number(invoice.valor_sin_iva) || 0;
   const valorIva = Number(invoice.valor_iva) || 0;
@@ -141,59 +165,88 @@ function generarAsientoEgreso(invoice, items) {
   // Antes de proponer cualquier línea, se valida la misma regla de la
   // tarea "IA documental" del roadmap: subtotal + IVA debe cuadrar con
   // el total. Si no cuadra, la factura tiene un problema de datos que
-  // hay que corregir ahí, no en el asiento -- no tiene sentido generar
-  // una partida doble "cuadrada a la fuerza" sobre números que ya están
-  // mal desde la factura.
+  // hay que corregir ahí, no en el asiento.
   if (Math.abs(valorSinIva + valorIva - valorConIva) > 1) {
     return { error: 'valores_no_cuadran' };
   }
 
   const itemsConCategoria = Array.isArray(items) ? items.filter((it) => it.subcuenta_gasto) : [];
 
-  // Débitos del gasto -- una línea por cada subcuenta distinta que
-  // aparezca (agrupa los ítems que comparten subcuenta y suma su
-  // subtotal). Si la factura no tiene ítems con subcuenta propia, cae
-  // al caso de siempre: una sola categoría, con la subcuenta de la
-  // cabecera de la factura.
-  const gastosPorCuenta = new Map(); // codigo -> {monto, nombre}
+  // Débitos del gasto -- una línea por cada subcuenta distinta (agrupa
+  // los ítems que la comparten). Cada cuenta lleva también el IVA que
+  // es mayor valor de su gasto (`ivaGasto`), si aplica.
+  const gastosPorCuenta = new Map(); // codigo -> {monto, ivaGasto}
+  let ivaMayorValor = 0;
   if (itemsConCategoria.length > 0) {
+    const ivaItems = itemsConCategoria.reduce((s, it) => s + (Number(it.valor_iva) || 0), 0);
     for (const item of itemsConCategoria) {
       const codigo = codigoCuentaGasto(item.subcuenta_gasto);
       const monto = Number(item.subtotal) || 0;
       if (monto <= 0) continue;
-      const cuenta = PLAN_CUENTAS_SEMILLA.find((c) => c.codigo === codigo);
-      const existente = gastosPorCuenta.get(codigo) || { monto: 0, nombre: cuenta ? cuenta.nombre : codigo };
+      const existente = gastosPorCuenta.get(codigo) || { monto: 0, ivaGasto: 0 };
       existente.monto += monto;
+      // IVA de esta línea que va al gasto: todo, si el cliente no es
+      // responsable de IVA; o el de las líneas marcadas "IVA mayor valor".
+      if (opciones.ivaMayorValorGasto || item.iva_mayor_valor === true || item.iva_mayor_valor === 'true') {
+        const ivaLinea = ivaItems > 0 ? (Number(item.valor_iva) || 0) : 0;
+        existente.ivaGasto += ivaLinea;
+        ivaMayorValor += ivaLinea;
+      }
       gastosPorCuenta.set(codigo, existente);
     }
   } else if (invoice.subcuenta_gasto) {
-    const codigo = codigoCuentaGasto(invoice.subcuenta_gasto);
-    const cuenta = PLAN_CUENTAS_SEMILLA.find((c) => c.codigo === codigo);
-    gastosPorCuenta.set(codigo, { monto: valorSinIva, nombre: cuenta ? cuenta.nombre : codigo });
+    gastosPorCuenta.set(codigoCuentaGasto(invoice.subcuenta_gasto), { monto: valorSinIva, ivaGasto: 0 });
   }
 
   // Sin ninguna subcuenta de gasto elegida todavía, no hay de dónde
-  // sacar el débito principal -- el contador tiene que elegirla primero
-  // (en la ficha de la factura, como ya hace hoy).
+  // sacar el débito principal -- el contador tiene que elegirla primero.
   if (gastosPorCuenta.size === 0) return { error: 'sin_subcuenta_gasto' };
+
+  // Cliente no responsable de IVA sin IVA por ítem (factura sin desglose,
+  // o ítems sin IVA prorrateado): todo el IVA se reparte entre las
+  // cuentas de gasto en proporción a su valor.
+  if (opciones.ivaMayorValorGasto && valorIva > 0 && Math.abs(ivaMayorValor - valorIva) > 1) {
+    const totalGasto = [...gastosPorCuenta.values()].reduce((s, g) => s + g.monto, 0);
+    let repartido = 0;
+    const cuentas = [...gastosPorCuenta.values()];
+    cuentas.forEach((g, i) => {
+      g.ivaGasto = i === cuentas.length - 1 ? round2(valorIva - repartido) : round2(totalGasto > 0 ? valorIva * g.monto / totalGasto : 0);
+      repartido += g.ivaGasto;
+    });
+    ivaMayorValor = valorIva;
+  }
 
   const lineas = [];
   let orden = 0;
-  for (const [codigo, { monto, nombre }] of gastosPorCuenta) {
-    lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: nombre, debito: round2(monto), credito: 0 });
+  const debitos = new Map(); // codigo -> monto, para juntar gasto + IVA si van a la misma cuenta
+  const sumarDebito = (codigo, monto) => debitos.set(codigo, (debitos.get(codigo) || 0) + monto);
+  for (const [codigo, { monto, ivaGasto }] of gastosPorCuenta) {
+    sumarDebito(codigo, monto);
+    if (ivaGasto > 0) {
+      // La cuenta "IVA ..." del plan del cliente que acompaña este gasto
+      // (ej. 513508 IVA VIGILANCIA); si no tiene, a la misma cuenta.
+      const cuentaIva = cuentaIvaGastoCliente(puc, codigo);
+      sumarDebito(cuentaIva ? String(cuentaIva.codigo) : codigo, ivaGasto);
+    }
+  }
+  for (const [codigo, monto] of debitos) {
+    lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: nombreDe(codigo), debito: round2(monto), credito: 0, cuenta_cliente: delCliente(codigo) });
   }
 
-  if (valorIva > 0) {
-    lineas.push({ orden: orden++, cuenta_codigo: '2408', cuenta_nombre: 'Impuesto sobre las ventas por pagar (IVA)', debito: round2(valorIva), credito: 0 });
+  const ivaDescontable = round2(valorIva - ivaMayorValor);
+  if (ivaDescontable > 0) {
+    // El auxiliar de IVA descontable del cliente si lo tiene (ej.
+    // 24081001 IVA DESCONTADOS); si no, la 2408.
+    const propia = puc.filter((c) => cuentaUsable(c) && String(c.codigo).startsWith('2408') && /DESCONT/i.test(String(c.concepto || '')))[0];
+    const codigo = propia ? String(propia.codigo) : '2408';
+    lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: nombreDe(codigo, 'Impuesto sobre las ventas por pagar (IVA)'), debito: ivaDescontable, credito: 0, cuenta_cliente: !!propia });
   }
 
   // Retención en la fuente -- si TODAS las categorías involucradas
-  // comparten la misma subcuenta de retención (el caso normal: una
-  // factura de una sola categoría, o varias que igual caen en la misma
-  // cuenta, ej. "servicios" y "transporte_carga" comparten 236525), se
-  // usa esa subcuenta específica. Si hay más de una distinta, la
-  // factura solo guarda el TOTAL de rete_fuente (no cuánto es de cada
-  // categoría), así que no se puede repartir sin adivinar -- se usa la
+  // comparten la misma subcuenta de retención (el caso normal), se usa
+  // esa subcuenta, o el auxiliar del cliente de la tarifa aplicada. Si
+  // hay más de una distinta, la factura solo guarda el TOTAL de
+  // rete_fuente, así que no se puede repartir sin adivinar -- se usa la
   // cuenta genérica 2365 y se deja una nota para que el contador la
   // reclasifique a mano si hace falta.
   if (reteFuente > 0) {
@@ -204,7 +257,13 @@ function generarAsientoEgreso(invoice, items) {
     if (cuentasRetencion.size === 1) {
       const [codigo] = cuentasRetencion;
       const config = Object.values(TARIFAS_RETENCION).find((c) => c.cuentaPUC === codigo);
-      lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: `Retención en la fuente -- ${config.nombrePUC}`, debito: 0, credito: round2(reteFuente) });
+      const tarifa = tarifaAplicada(reteFuente, categorias, invoice, itemsConCategoria, valorSinIva);
+      const propia = tarifa ? cuentaRetencionCliente(puc, codigo, tarifa) : null;
+      if (propia) {
+        lineas.push({ orden: orden++, cuenta_codigo: String(propia.codigo), cuenta_nombre: String(propia.concepto).trim(), debito: 0, credito: round2(reteFuente), cuenta_cliente: true });
+      } else {
+        lineas.push({ orden: orden++, cuenta_codigo: codigo, cuenta_nombre: nombreCuentaCliente(puc, codigo) || `Retención en la fuente -- ${config.nombrePUC}`, debito: 0, credito: round2(reteFuente), cuenta_cliente: delCliente(codigo) });
+      }
     } else {
       lineas.push({
         orden: orden++,
@@ -212,39 +271,72 @@ function generarAsientoEgreso(invoice, items) {
         cuenta_nombre: 'Retención en la fuente por pagar (revisar reparto entre categorías -- esta factura mezcla más de una)',
         debito: 0,
         credito: round2(reteFuente),
+        cuenta_cliente: false,
       });
     }
   }
 
+  // ReteIVA (15% del IVA) y ReteICA: el auxiliar del cliente bajo la
+  // cuenta estándar si lo tiene (por tarifa, o el único que haya).
+  const lineaRetencionFija = (fija, valor, tarifa) => {
+    const propia = cuentaRetencionCliente(puc, fija.cuentaPUC, tarifa);
+    if (propia) return { cuenta_codigo: String(propia.codigo), cuenta_nombre: String(propia.concepto).trim(), cuenta_cliente: true };
+    return { cuenta_codigo: fija.cuentaPUC, cuenta_nombre: nombreCuentaCliente(puc, fija.cuentaPUC) || fija.nombrePUC, cuenta_cliente: delCliente(fija.cuentaPUC) };
+  };
   if (reteIva > 0) {
-    lineas.push({ orden: orden++, cuenta_codigo: CUENTAS_PUC_FIJAS.rete_iva.cuentaPUC, cuenta_nombre: CUENTAS_PUC_FIJAS.rete_iva.nombrePUC, debito: 0, credito: round2(reteIva) });
+    lineas.push({ orden: orden++, ...lineaRetencionFija(CUENTAS_PUC_FIJAS.rete_iva, reteIva, 0.15), debito: 0, credito: round2(reteIva) });
   }
   if (reteIca > 0) {
-    lineas.push({ orden: orden++, cuenta_codigo: CUENTAS_PUC_FIJAS.rete_ica.cuentaPUC, cuenta_nombre: CUENTAS_PUC_FIJAS.rete_ica.nombrePUC, debito: 0, credito: round2(reteIca) });
+    const tarifaIca = valorSinIva > 0 ? Math.round((reteIca / valorSinIva) * 100000) / 100000 : 0;
+    lineas.push({ orden: orden++, ...lineaRetencionFija(CUENTAS_PUC_FIJAS.rete_ica, reteIca, tarifaIca), debito: 0, credito: round2(reteIca) });
   }
 
   // Lo que de verdad se le debe al proveedor: el total de la factura
   // menos todas las retenciones que se le practicaron.
   const saldoProveedor = valorConIva - reteFuente - reteIva - reteIca;
   if (saldoProveedor > 0) {
-    lineas.push({ orden: orden++, cuenta_codigo: '2205', cuenta_nombre: 'Proveedores nacionales', debito: 0, credito: round2(saldoProveedor) });
+    lineas.push({ orden: orden++, cuenta_codigo: '2205', cuenta_nombre: nombreDe('2205', 'Proveedores nacionales'), debito: 0, credito: round2(saldoProveedor), cuenta_cliente: delCliente('2205') });
   } else if (saldoProveedor < 0) {
-    // No debería pasar con datos válidos (las retenciones nunca superan
-    // el total de la factura) -- si pasa, es una señal de que algo en
-    // los valores de la factura está mal, mejor no proponer nada.
+    // No debería pasar con datos válidos -- mejor no proponer nada.
     return { error: 'retenciones_mayores_al_total' };
   }
 
   const debe = round2(lineas.reduce((s, l) => s + l.debito, 0));
   const haber = round2(lineas.reduce((s, l) => s + l.credito, 0));
   if (Math.abs(debe - haber) > 1) {
-    // Red de seguridad -- con la lógica de arriba esto no debería pasar
-    // nunca, pero un asiento que no cuadra jamás debería llegar a
-    // guardarse, así que se revisa explícitamente antes de devolverlo.
+    // Red de seguridad -- un asiento que no cuadra jamás debería guardarse.
     return { error: 'asiento_no_cuadra' };
   }
 
   return { lineas, debe, haber };
+}
+
+// Tarifa de retención que se aplicó en la factura, deducida del valor
+// retenido: entre las tarifas legales de sus categorías, la que sobre
+// alguna base posible (subtotal, ítems de la categoría o AIU) da el
+// valor retenido; si ninguna calza, el cociente retención / subtotal.
+// Sirve para escoger el auxiliar del cliente (ej. servicios 4% vs 6%).
+function tarifaAplicada(reteFuente, categorias, invoice, items, valorSinIva) {
+  const tarifas = new Set();
+  categorias.forEach((cat) => {
+    const config = TARIFAS_RETENCION[cat];
+    if (config) { tarifas.add(config.tarifaBaja); tarifas.add(config.tarifaAlta); }
+  });
+  const bases = new Set([valorSinIva]);
+  const subtotalItems = (items || []).reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+  if (subtotalItems > 0) bases.add(subtotalItems);
+  let aiu = invoice.desglose_aiu;
+  if (typeof aiu === 'string') { try { aiu = JSON.parse(aiu); } catch (e) { aiu = null; } }
+  if (aiu && typeof aiu === 'object') {
+    const totalAiu = Object.values(aiu).reduce((s, v) => s + (Number(v) || 0), 0);
+    if (totalAiu > 0) bases.add(totalAiu);
+  }
+  for (const tarifa of tarifas) {
+    for (const base of bases) {
+      if (base > 0 && Math.abs(base * tarifa - reteFuente) <= Math.max(2, reteFuente * 0.01)) return tarifa;
+    }
+  }
+  return valorSinIva > 0 ? Math.round((reteFuente / valorSinIva) * 1000) / 1000 : 0;
 }
 
 function round2(n) {
