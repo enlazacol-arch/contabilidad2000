@@ -347,6 +347,7 @@
   }
   .item-del-btn:hover{ border-color:var(--err); color:var(--err); }
   .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:var(--t-12); color:var(--ink-soft); }
+  .item-iva-mv-todas{ cursor:pointer; text-transform:none; letter-spacing:0; font-weight:600; margin-top:4px; }
   .items-foot{
     display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
     margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
@@ -3196,7 +3197,7 @@ function renderItemsPanel(){
       <div class="items-table-wrap">
         <table class="items-table">
           <thead><tr>
-            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Subcuenta (PUC)</th><th>AIU</th><th>Tarifa retención</th><th>IVA mayor valor</th><th></th>
+            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Subcuenta (PUC)</th><th>AIU</th><th>Tarifa retención</th><th>IVA mayor valor<label class="item-iva-mv item-iva-mv-todas" title="Marcar o desmarcar el IVA no descontable en todos los ítems"><input type="checkbox" id="itIvaMvTodas" aria-label="IVA no descontable en todos los ítems"> Todos</label></th><th></th>
           </tr></thead>
           <tbody id="itemsTbody">${filas}</tbody>
         </table>
@@ -3285,7 +3286,22 @@ function renderItemsPanel(){
       onItemsChanged();
     } else if (e.target.classList.contains('it-iva-mv')) {
       currentItems[idx].iva_mayor_valor = e.target.checked;
+      sincronizarIvaMvTodas();
     }
+  });
+  // "Todos": marca o desmarca el IVA no descontable en todos los ítems
+  // de una vez (ej. un cliente no responsable de IVA con 10 ítems).
+  const ivaMvTodas = document.getElementById('itIvaMvTodas');
+  function sincronizarIvaMvTodas(){
+    const marcados = currentItems.filter((it) => it.iva_mayor_valor).length;
+    ivaMvTodas.checked = marcados > 0 && marcados === currentItems.length;
+    ivaMvTodas.indeterminate = marcados > 0 && marcados < currentItems.length;
+  }
+  sincronizarIvaMvTodas();
+  ivaMvTodas.addEventListener('change', () => {
+    currentItems.forEach((it) => { it.iva_mayor_valor = ivaMvTodas.checked; });
+    tbody.querySelectorAll('.it-iva-mv').forEach((cb) => { cb.checked = ivaMvTodas.checked; });
+    sincronizarIvaMvTodas();
   });
   tbody.addEventListener('click', (e) => {
     if (!e.target.classList.contains('item-del-btn') || e.target.disabled) return;
