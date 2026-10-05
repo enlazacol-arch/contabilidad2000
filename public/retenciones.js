@@ -1065,6 +1065,13 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
     try { raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
   }
   const subcuentaPorDefecto = (categoria, textoItem) => {
+    // Servicios públicos con un ítem por servicio (acueducto, energía...):
+    // manda el servicio de ESTA línea, antes que lo aprendido con el
+    // proveedor (que es una sola cuenta para toda la factura).
+    if (categoria === 'servicios_publicos' && textoItem) {
+      const porServicio = subcuentaServicioPublico(textoItem);
+      if (porServicio) return porServicio;
+    }
     const sugerida = subcuentaSugerida(data.nit_cc, categoria, `${data.nombre_razon_social || ''} ${textoItem || data.concepto || ''}`);
     if (sugerida) return sugerida;
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];

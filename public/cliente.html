@@ -112,6 +112,11 @@
   .puc-th-ordenable{ cursor:pointer; user-select:none; }
   .puc-th-ordenable:hover{ color:var(--ink-soft); }
   .puc-flecha{ font-size:var(--t-12); }
+  .facturas-tabla-wrap{ overflow-x:auto; }
+  .mini-facturas .num-factura{ font-family:var(--font-num); white-space:nowrap; }
+  .mini-facturas .num-comprobante{ font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-soft); white-space:nowrap; }
+  .mini-facturas .num-comprobante.falta{ color:var(--warn); }
+  .btn-ver-factura{ white-space:nowrap; }
   .puc-opcion-iva{ display:flex; gap:10px; align-items:flex-start; font-size:var(--t-13); color:var(--ink-soft); max-width:80ch; margin:0 0 16px; cursor:pointer; }
   .puc-opcion-iva input{ margin-top:3px; }
   .puc-resumen{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; font-size:var(--t-13); color:var(--ink-soft); margin:0 0 12px; }
@@ -251,22 +256,37 @@
 
     <div class="chart-card">
       <div class="card-head">
-        <h2>Últimas facturas de este cliente</h2>
+        <h2>Facturas de este cliente</h2>
         <a class="ver-todas" id="linkVerTodas" href="#">Ver todas en Facturas →</a>
       </div>
-      <table class="mini-facturas" id="tablaFacturas">
-        <thead>
-          <tr>
-            <th>Mov.</th>
-            <th>Contraparte</th>
-            <th>Concepto</th>
-            <th>Fecha</th>
-            <th class="money">Total</th>
-          </tr>
-        </thead>
-        <tbody id="tablaFacturasBody"></tbody>
-      </table>
+      <div class="puc-toolbar" id="facturasToolbar" style="display:none;">
+        <input type="text" id="facturasBuscar" class="puc-buscar" placeholder="Buscar por tercero, NIT, número o comprobante..." aria-label="Buscar factura">
+        <select id="facturasMes" class="puc-filtro-categoria" aria-label="Mes"></select>
+        <select id="facturasMov" class="puc-filtro-categoria" aria-label="Movimiento">
+          <option value="">Todos los movimientos</option>
+          <option value="egreso">Egresos</option>
+          <option value="ingreso">Ingresos</option>
+        </select>
+        <span class="puc-contador" id="facturasContador"></span>
+      </div>
+      <div class="facturas-tabla-wrap">
+        <table class="mini-facturas" id="tablaFacturas">
+          <thead>
+            <tr>
+              <th>Mov.</th>
+              <th>Contraparte</th>
+              <th>Factura / Comprobante</th>
+              <th>Concepto</th>
+              <th>Fecha</th>
+              <th class="money">Total</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tablaFacturasBody"></tbody>
+        </table>
+      </div>
       <div id="facturasEmpty" class="empty-note" style="display:none;">Aún no hay facturas guardadas para este cliente. Escanea la primera con el botón de arriba.</div>
+      <div id="facturasSinResultados" class="empty-note" style="display:none;">Ninguna factura coincide con el filtro.</div>
     </div>
 
     <div class="chart-card" id="pucCard">
@@ -460,7 +480,9 @@ async function cargarYRenderizar(){
   balEl.textContent = fmtCOP(balance12);
   balEl.classList.add(balance12 >= 0 ? 'positivo' : 'negativo');
 
-  // ---- Últimas facturas (máximo 15, más recientes primero) ----
+  // ---- Facturas del cliente: filtros (mes, movimiento, búsqueda) ----
+  // Sin filtros se muestran las 15 más recientes; con un mes o una
+  // búsqueda, todas las que coincidan.
   const tbody = document.getElementById('tablaFacturasBody');
   const tabla = document.getElementById('tablaFacturas');
   const emptyEl = document.getElementById('facturasEmpty');
@@ -471,40 +493,80 @@ async function cargarYRenderizar(){
     return;
   }
 
-  const ultimas = [...facturasCliente]
-    .sort((a, b) => fechaOrdenable(b.fecha_factura) - fechaOrdenable(a.fecha_factura))
-    .slice(0, 15);
-
-  tbody.innerHTML = ultimas.map(inv => {
-    const movTipo = inv.tipo_movimiento || 'egreso';
-    // La contraparte depende de si esta factura es un ingreso o un
-    // egreso PARA ESTE cliente -- si es ingreso, él fue quien vendió,
-    // así que la contraparte es quien compró (adquiriente); si es
-    // egreso, él compró, así que la contraparte es el proveedor.
-    const contraparte = movTipo === 'ingreso'
-      ? (inv.adquiriente_nombre || 'Sin identificar')
-      : (inv.nombre_razon_social || 'Sin identificar');
-    const sinIva = Number(inv.valor_sin_iva) || 0;
-    const iva = Number(inv.valor_iva) || 0;
-    const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
-    return `
-      <tr class="factura-row-clicable" data-id="${escapeHtml(inv.id)}" title="Ver la factura y el documento original">
-        <td><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
-        <td><div class="contraparte-nombre">${escapeHtml(contraparte)}</div></td>
-        <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
-        <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
-        <td class="money">${fmtCOP(conIva)}</td>
-      </tr>
-    `;
+  const ordenadas = [...facturasCliente].sort((a, b) => fechaOrdenable(b.fecha_factura) - fechaOrdenable(a.fecha_factura));
+  const mesDe = (fecha) => { const p = String(fecha || '').split('/'); return p.length === 3 ? `${p[2]}-${p[1].padStart(2, '0')}` : ''; };
+  const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const meses = [...new Set(ordenadas.map((inv) => mesDe(inv.fecha_factura)).filter(Boolean))];
+  const selMes = document.getElementById('facturasMes');
+  selMes.innerHTML = '<option value="">Todos los meses</option>' + meses.map((m) => {
+    const [y, mm] = m.split('-');
+    return `<option value="${m}">${MESES[Number(mm) - 1] || mm} ${y}</option>`;
   }).join('');
-  // Clic en cualquier fila -- abre esa factura puntual en Facturas, con
-  // su documento original y, si hace falta, la opción de corregir
-  // Ingreso/Egreso -- funciona sin importar si ya está aprobada.
-  tbody.querySelectorAll('tr[data-id]').forEach((tr) => {
-    tr.addEventListener('click', () => {
-      window.location.href = '/facturas.html?cliente=' + encodeURIComponent(cliente.id) + '&factura=' + encodeURIComponent(tr.dataset.id);
+  document.getElementById('facturasToolbar').style.display = 'flex';
+  const normalizar = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  const pintarFacturas = () => {
+    const mes = selMes.value;
+    const mov = document.getElementById('facturasMov').value;
+    const termino = normalizar(document.getElementById('facturasBuscar').value.trim());
+    const filtradas = ordenadas.filter((inv) => {
+      if (mes && mesDe(inv.fecha_factura) !== mes) return false;
+      if (mov && (inv.tipo_movimiento || 'egreso') !== mov) return false;
+      if (!termino) return true;
+      return [inv.nombre_razon_social, inv.adquiriente_nombre, inv.nit_cc, inv.concepto, `${inv.letras_fe || ''}${inv.numeros_fe || ''}`, inv.numero_digitacion]
+        .some((v) => normalizar(v).includes(termino));
     });
-  });
+    const sinFiltros = !mes && !mov && !termino;
+    const lista = sinFiltros ? filtradas.slice(0, 15) : filtradas;
+    document.getElementById('facturasContador').textContent = sinFiltros
+      ? `Las ${lista.length} más recientes de ${ordenadas.length}`
+      : `${filtradas.length} de ${ordenadas.length} facturas`;
+    document.getElementById('facturasSinResultados').style.display = lista.length === 0 ? 'block' : 'none';
+    tabla.style.display = lista.length === 0 ? 'none' : '';
+
+    tbody.innerHTML = lista.map(inv => {
+      const movTipo = inv.tipo_movimiento || 'egreso';
+      // La contraparte depende de si esta factura es un ingreso o un
+      // egreso PARA ESTE cliente -- si es ingreso, él fue quien vendió,
+      // así que la contraparte es quien compró (adquiriente); si es
+      // egreso, él compró, así que la contraparte es el proveedor.
+      const contraparte = movTipo === 'ingreso'
+        ? (inv.adquiriente_nombre || 'Sin identificar')
+        : (inv.nombre_razon_social || 'Sin identificar');
+      const sinIva = Number(inv.valor_sin_iva) || 0;
+      const iva = Number(inv.valor_iva) || 0;
+      const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
+      const numFactura = `${inv.letras_fe || ''}${inv.numeros_fe || ''}`.trim();
+      const comprobante = String(inv.numero_digitacion || '').trim();
+      return `
+        <tr class="factura-row-clicable" data-id="${escapeHtml(inv.id)}" title="Ver la factura y el documento original">
+          <td><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
+          <td><div class="contraparte-nombre">${escapeHtml(contraparte)}</div></td>
+          <td>
+            <div class="num-factura">${numFactura ? 'N.° ' + escapeHtml(numFactura) : '—'}</div>
+            <div class="num-comprobante${comprobante ? '' : ' falta'}">${comprobante ? 'Comp. ' + escapeHtml(comprobante) : 'Sin comprobante'}</div>
+          </td>
+          <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
+          <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
+          <td class="money">${fmtCOP(conIva)}</td>
+          <td><button type="button" class="btn ghost btn--sm btn-ver-factura">Ver factura</button></td>
+        </tr>
+      `;
+    }).join('');
+  };
+  pintarFacturas();
+  document.getElementById('facturasMes').onchange = pintarFacturas;
+  document.getElementById('facturasMov').onchange = pintarFacturas;
+  document.getElementById('facturasBuscar').oninput = pintarFacturas;
+
+  // Clic en la fila o en "Ver factura" -- abre esa factura puntual en
+  // Facturas, con su documento original y, si hace falta, la opción de
+  // corregir Ingreso/Egreso -- funciona sin importar si ya está aprobada.
+  tbody.onclick = (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    window.location.href = '/facturas.html?cliente=' + encodeURIComponent(cliente.id) + '&factura=' + encodeURIComponent(tr.dataset.id);
+  };
 }
 
 // ---------- Plan de cuentas (PUC) propio del cliente ----------

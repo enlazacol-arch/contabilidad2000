@@ -108,6 +108,15 @@
   .del-btn:hover{ color:var(--err); background:var(--err-bg); }
   .del-btn.edit-btn:hover, .del-btn.ficha-btn:hover{ color:var(--pet-600); background:var(--pet-100); }
   .row-actions{ display:flex; align-items:center; gap:2px; justify-content:flex-end; white-space:nowrap; }
+  .ver-btn{
+    background:none; border:1px solid transparent; color:var(--pet-600);
+    font-family:var(--font-ui); font-size:var(--t-13); font-weight:600;
+    cursor:pointer; min-height:32px; padding:4px var(--s-2); border-radius:var(--r-sm);
+  }
+  .ver-btn:hover{ background:var(--pet-100); }
+  .num-factura{ font-family:var(--font-num); white-space:nowrap; }
+  .num-comprobante{ font-family:var(--font-num); font-size:var(--t-12); color:var(--text-2); white-space:nowrap; }
+  .num-comprobante.falta{ color:var(--warn); }
   .alegra-btn{
     background:var(--surface); border:1px solid var(--border-strong); color:var(--pet-600);
     font-family:var(--font-ui); font-size:var(--t-13); font-weight:600;
@@ -398,6 +407,7 @@
         <tr>
           <th>Mov.</th>
           <th>Proveedor</th>
+          <th>Factura / Comprobante</th>
           <th>Concepto</th>
           <th>Fecha</th>
           <th style="text-align:right">Sin IVA</th>
@@ -410,7 +420,7 @@
       <tbody id="tbody"></tbody>
       <tfoot>
         <tr>
-          <td colspan="4">Total facturas: <span id="countValue">0</span></td>
+          <td colspan="5">Total facturas: <span id="countValue">0</span></td>
           <td class="money" id="footSubtotal">$0</td>
           <td class="money" id="footIva">$0</td>
           <td class="money" id="footTotal">$0</td>
@@ -527,6 +537,8 @@
       <div class="doc-campo"><span class="doc-label">Concepto</span><span id="docConcepto"></span></div>
       <div class="doc-campo"><span class="doc-label">Fecha</span><span id="docFecha"></span></div>
       <div class="doc-campo"><span class="doc-label">Total (con IVA)</span><span id="docTotal"></span></div>
+      <div class="doc-campo"><span class="doc-label">N.° de factura</span><span id="docNumero"></span></div>
+      <div class="doc-campo"><span class="doc-label">Comprobante contable</span><span id="docComprobante"></span></div>
     </div>
     <div class="modal-doc-visor" id="docVisorWrap"></div>
   </div>
@@ -755,6 +767,11 @@ function renderTable(){
     const excepcionesBadges = excepcionesFactura.length > 0
       ? `<span class="exc-lista">${excepcionesFactura.map((e) => `<span class="exc-badge" title="${escapeHtml(e.detalle)}">⚠ ${escapeHtml(e.etiqueta)}</span>`).join('')}</span>`
       : '';
+    // Número de la factura y comprobante con el que se registró en el
+    // programa contable (numero_digitacion) -- la contadora los necesita
+    // a la vista para cruzar con su contabilidad.
+    const numFactura = `${inv.letras_fe || ''}${inv.numeros_fe || ''}`.trim();
+    const comprobante = String(inv.numero_digitacion || '').trim();
     const borradorBadge = !inv.aprobado_por_contador
       ? `<span class="borrador-badge" title="Todavía no se aprueba en Revisión -- no cuenta en los totales ni en los reportes.">Borrador</span>`
       : '';
@@ -764,6 +781,10 @@ function renderTable(){
         <div class="proveedor-nombre">${escapeHtml(inv.nombre_razon_social) || '—'}${excepcionesBadges}</div>
         <div class="proveedor-nit">${inv.tipo_doc ? 'Tipo ' + escapeHtml(inv.tipo_doc) + ' · ' : ''}NIT ${escapeHtml(inv.nit_cc) || '—'}${inv.dv ? '-' + escapeHtml(inv.dv) : ''}</div>
       </td>
+      <td>
+        <div class="num-factura">${numFactura ? 'N.° ' + escapeHtml(numFactura) : '—'}</div>
+        <div class="num-comprobante${comprobante ? '' : ' falta'}">${comprobante ? 'Comp. ' + escapeHtml(comprobante) : 'Sin comprobante'}</div>
+      </td>
       <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
       <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
       <td class="money">${formatCOP(sinIva)}</td>
@@ -772,6 +793,7 @@ function renderTable(){
       <td class="money" title="${escapeHtml(retencionTitle)}">${totalRetenciones > 0 ? formatCOP(totalRetenciones) : '—'}</td>
       <td>
         <div class="row-actions">
+          <button class="ver-btn" type="button" title="Ver la factura y el documento original">ver</button>
           ${accionesIntegracionHtml(inv)}
           ${puedeAdministrar(miRol) ? `<button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button>` : ''}
         </div>
@@ -1697,6 +1719,8 @@ function pintarDetalleFactura(){
   document.getElementById('docContraparte').textContent = contraparte;
   document.getElementById('docConcepto').textContent = inv.concepto || '—';
   document.getElementById('docFecha').textContent = inv.fecha_factura || '—';
+  document.getElementById('docNumero').textContent = `${inv.letras_fe || ''}${inv.numeros_fe || ''}`.trim() || '—';
+  document.getElementById('docComprobante').textContent = String(inv.numero_digitacion || '').trim() || 'Sin comprobante';
   document.getElementById('docTotal').textContent = formatCOP(conIva);
   document.getElementById('docVisorWrap').innerHTML = renderVisorDocumento(inv);
 

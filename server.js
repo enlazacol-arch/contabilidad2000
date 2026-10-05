@@ -3628,7 +3628,7 @@ const CAMPOS_FACTURA_JSON = `{
   "documento_valido": "true SOLO si tipo_documento es 'factura_venta', 'cuenta_cobro' o 'factura_servicios_publicos'. false para 'otro'",
   "motivo_rechazo": "si documento_valido es false, una frase breve en español explicando qué parece ser el documento en su lugar (ej: 'Este documento parece ser un comprobante de transferencia bancaria, no una factura ni una cuenta de cobro'). Si documento_valido es true, cadena vacía",
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
-  "nit_cc": "número de identificación (NIT o cédula) del proveedor/emisor, solo dígitos. Hay documentos reales que NO traen este número (ej. cuentas de cobro de una propiedad horizontal/conjunto residencial, donde en vez de un NIT aparece algo como 'Propiedad Horizontal' o el nombre del edificio) -- en esos casos deja este campo como cadena vacía. Nunca inventes un número ni tomes prestado uno de otra parte del documento (el consecutivo de la cuenta de cobro, la fecha, el NIT del adquiriente, etc.) -- si no hay un número de identificación real y propio del emisor, va vacío.",
+  "nit_cc": "número de identificación (NIT o cédula) del proveedor/emisor, solo dígitos. Hay documentos reales que NO traen este número (ej. cuentas de cobro de una propiedad horizontal/conjunto residencial, donde en vez de un NIT aparece algo como 'Propiedad Horizontal' o el nombre del edificio) -- en esos casos deja este campo como cadena vacía. Nunca inventes un número ni tomes prestado uno de otra parte del documento (el consecutivo de la cuenta de cobro, la fecha, el NIT del adquiriente, etc.) -- si no hay un número de identificación real y propio del emisor, va vacío. Lo mismo si el NIT SÍ existe pero no se alcanza a ver en la imagen (foto recortada, doblada, borrosa o con esa parte fuera de cuadro): déjalo vacío aunque reconozcas la empresa por su nombre o su logo (ej. EPM, Claro, Éxito) -- NUNCA lo completes de memoria ni con un NIT que creas conocer; Enlaza lo toma de las facturas que ya tiene registradas de ese proveedor.",
   "dv": "dígito de verificación si aparece, si no aparece pon una cadena vacía",
   "nombre_razon_social": "nombre o razón social LEGAL del proveedor/emisor, asociado al NIT/cédula que anotaste en nit_cc -- no el nombre comercial, marca o logo del encabezado cuando sean distintos. Es un caso frecuente en cuentas de cobro e independientes: el logo/encabezado dice una marca o sigla (ej. 'IMB'), pero el bloque de datos del emisor (RUT, pie de página, firma) trae el nombre real de la persona o la razón social inscrita ante la DIAN (ej. 'Andrés Felipe Gómez') -- en ese caso usa SIEMPRE el nombre real asociado al NIT/cédula, nunca la marca o sigla del logo.",
   "letras_fe": "prefijo alfabético de la factura electrónica si existe (ej: FE, SETP), si no existe cadena vacía",
@@ -3653,7 +3653,7 @@ const CAMPOS_FACTURA_JSON = `{
   "valor_letras_numero": "SOLO si llenaste valor_letras_texto: convierte ESAS PALABRAS a un número entero (ej. si el texto dice 'un millón cien mil pesos', este campo es 1100000), para que el sistema pueda comparar si coincide con el valor en números del documento -- esto es clave porque a veces el valor escrito en letras NO coincide con el valor escrito en números (un error de digitación o de imprenta en el documento original), y detectar esa diferencia es importante. Conviértelo con cuidado, palabra por palabra, sin asumir que necesariamente es igual a valor_con_iva. Si valor_letras_texto quedó vacío, usa 0 en este campo.",
   "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'servicios_publicos' (usa SIEMPRE esta categoría cuando tipo_documento es 'factura_servicios_publicos', sin importar cuántos servicios distintos venga combinando el documento -- acueducto, alcantarillado, energía, aseo, etc. son todos 'servicios_publicos'), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
   "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
-  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). EXCEPCIÓN -- factura de servicios públicos: cuando tipo_documento es 'factura_servicios_publicos' y el documento combina varios servicios (ej. acueducto + alcantarillado + energía + aseo, cada uno con su propio subtotal), NO los separes en varios ítems -- devuelve siempre un arreglo con UN SOLO elemento por el valor TOTAL de la factura (todos los servicios sumados), \"descripcion\": 'Servicios públicos' seguido de cuáles servicios incluye (ej. 'Servicios públicos (acueducto, alcantarillado, energía, aseo)'), \"categoria_concepto\": 'servicios_publicos'. Nunca inventes ítems que no estén realmente en el documento.",
+  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). FACTURA DE SERVICIOS PÚBLICOS: cuando tipo_documento es 'factura_servicios_publicos', devuelve UN ítem por CADA línea del resumen de lo facturado (ej. 'Acueducto', 'Alcantarillado', 'Energía', 'Gas', 'Aseo', 'Alumbrado público', 'Otras entidades', 'Intereses de mora'), con \"descripcion\": el nombre del servicio tal como aparece (más el consumo si se ve, ej. 'Energía 544 kWh'), \"subtotal\": el valor a pagar de ESA línea en pesos ENTEROS, \"categoria_concepto\": 'servicios_publicos'. Las líneas que NO son consumo del periodo -- 'Acuerdos de pago', 'Financiación', 'Cuota de financiación', 'Saldo anterior', 'Deuda anterior' -- van como su propio ítem, con la descripción tal cual (ej. 'Acuerdos de pago') y \"categoria_concepto\": 'otro', para que el contador decida su cuenta (no son gasto del mes). El 'Ajuste al peso' (unos pocos centavos o pesos) NO es un ítem: súmalo al ítem de mayor valor. El IVA (a veces rotulado 'Impuestos' o 'IVA', típico en telefonía e internet) tampoco es un ítem: va en valor_iva. La suma de los ítems debe dar valor_sin_iva (el total a pagar menos el IVA). Nunca inventes ítems que no estén realmente en el documento.",
   "confianza_campos": "un objeto con un puntaje de confianza NUMÉRICO de 0 a 1 (nunca texto) para cada uno de estos campos, indicando qué tan seguro estás de haber leído ESE dato correctamente en el documento -- 1 significa perfectamente legible y sin ambigüedad, 0.5 dudoso o parcialmente ilegible (ej. una cifra borrosa, un NIT con un dígito que podría ser 3 u 8), 0 no pudiste leerlo y lo dejaste vacío o en 0. Incluye exactamente estas claves: nit_cc, nombre_razon_social, fecha_factura, valor_sin_iva, valor_iva, valor_con_iva, rete_fuente, rete_iva, rete_ica, categoria_concepto. Ejemplo: {\"nit_cc\": 0.95, \"nombre_razon_social\": 1, \"fecha_factura\": 0.6, \"valor_sin_iva\": 1, \"valor_iva\": 1, \"valor_con_iva\": 1, \"rete_fuente\": 0.4, \"rete_iva\": 1, \"rete_ica\": 1, \"categoria_concepto\": 0.8}. Sé honesto -- si el documento está borroso, mal escaneado, o girado, o un valor no se alcanza a distinguir con certeza, usa un puntaje bajo en vez de fingir seguridad. No bajes el puntaje solo porque tuviste que interpretar el formato (punto/coma) de un valor que sí se lee con claridad."
 }`;
 
@@ -3701,7 +3701,7 @@ const INVOICE_PROMPT_VERSION = 'v3';
 // documento no se lea distinto solo por venir acompañado de otros --
 // lo único que cambia es que primero hay que SEGMENTAR el archivo en
 // documentos individuales, y devolver un arreglo con uno por cada uno.
-const PAQUETE_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un archivo (normalmente un PDF) que puede traer UN SOLO documento (el caso más común, incluso si ocupa varias páginas) o VARIOS documentos distintos concatenados uno tras otro en el mismo archivo -- por ejemplo, varias facturas de proveedores distintos escaneadas y unidas en un solo PDF, o una factura seguida de un extracto bancario o de otros soportes.
+const PAQUETE_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un archivo (un PDF o una FOTO) que puede traer UN SOLO documento (el caso más común, incluso si ocupa varias páginas) o VARIOS documentos distintos -- por ejemplo, varias facturas de proveedores distintos escaneadas y unidas en un solo PDF, una factura seguida de un extracto bancario o de otros soportes, o una FOTO en la que se ven varios documentos a la vez sobre la mesa (ej. tres tiquetes POS o tres facturas pequeñas uno al lado del otro, o una factura con su comprobante de pago al lado).
 
 Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos hay en realidad, antes de extraer ningún dato. Usa estas señales para saber cuándo empieza un documento NUEVO (no bases el corte solo en el número de página):
 - Aparece un encabezado o membrete distinto (otro logo, otro nombre de empresa emisora).
@@ -3709,6 +3709,8 @@ Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos 
 - Aparece un nuevo consecutivo de factura, CUFE, o número de "Cuenta de Cobro" distinto.
 - Aparece una nueva fecha de emisión y un nuevo total a pagar, sin que el documento anterior haya seguido en esa misma página con más ítems de la misma factura.
 - Cambia el TIPO de documento (ej. termina una factura y empieza un extracto bancario o un comprobante de pago).
+
+En una FOTO, cada documento es un papel físico distinto: bordes de papel separados, cada uno con su propio emisor, número y total. Léelos uno por uno, de izquierda a derecha y de arriba abajo, sin mezclar los valores de un papel con los de otro. Un solo papel fotografiado (aunque se vea torcido, doblado o con sombras) es UN solo documento.
 
 NO cortes un documento en varios solo porque tenga varias páginas: una factura de dos o tres páginas donde la tabla de ítems continúa de una página a la siguiente (mismo emisor, mismo consecutivo, mismo total) sigue siendo UN SOLO documento. La gran mayoría de los archivos que vas a recibir traen un solo documento -- solo segmenta en varios cuando de verdad encuentres las señales de arriba.
 
@@ -3725,7 +3727,7 @@ Incluye en el arreglo TANTO los documentos válidos (factura de venta, cuenta de
 Devuelve SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks, con esta forma exacta:
 
 {
-  "documentos": [ /* un elemento con la forma de arriba por cada documento distinto que identificaste, EN EL MISMO ORDEN en que aparecen en el archivo (de principio a fin) */ ]
+  "documentos": [ /* un elemento con la forma de arriba por cada documento distinto que identificaste, EN EL MISMO ORDEN en que aparecen en el archivo (de principio a fin; en una foto, de izquierda a derecha y de arriba abajo) */ ]
 }
 
 Si el archivo trae un solo documento (el caso más frecuente), "documentos" debe tener exactamente un elemento.
@@ -3884,6 +3886,29 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   //   en la prueba con facturas reales, 1 de 4 facturas de GAMOEZ salió
   //   con un dígito cambiado (900627469 en vez de 901627469).
   const avisosNit = [];
+  // Sin NIT legible (ej. la foto de la factura de EPM cortó esa parte): si
+  // este proveedor ya está registrado (por nombre) con un único NIT, se
+  // usa ese y se avisa, en vez de dejarlo vacío o inventado.
+  if (!parsed.nit_cc && parsed.nombre_razon_social) {
+    try {
+      const nombreSinTildes = parsed.nombre_razon_social.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const { rows } = await pool.query(
+        `SELECT nit_cc, MAX(dv) AS dv, COUNT(*) AS n FROM invoices
+          WHERE contador_id = $1 AND nit_cc <> ''
+            AND TRANSLATE(UPPER(TRIM(nombre_razon_social)), 'ÁÉÍÓÚÜ', 'AEIOUU') = $2
+          GROUP BY nit_cc ORDER BY n DESC LIMIT 2`,
+        [userId, nombreSinTildes]
+      );
+      if (rows.length === 1) {
+        parsed.nit_cc = normalizarNit(rows[0].nit_cc);
+        if (!parsed.dv && rows[0].dv) parsed.dv = rows[0].dv;
+        parsed.nit_desde_historial = true;
+        avisosNit.push(`El NIT no se ve en el documento: se tomó ${parsed.nit_cc}, el que ya tienes registrado para ${parsed.nombre_razon_social}. Confírmalo.`);
+      }
+    } catch (err) {
+      console.error('No se pudo buscar el NIT del proveedor en el historial:', err.message);
+    }
+  }
   if (parsed.nit_cc && parsed.dv !== undefined && parsed.dv !== null && String(parsed.dv).trim() !== '') {
     const dvCalculado = calcularDvNit(parsed.nit_cc);
     if (dvCalculado && dvCalculado !== String(parsed.dv).trim()) {
@@ -3901,7 +3926,16 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
         [userId, nombreSinTildes]
       );
       const conocidos = [...new Set(rows.map((r) => normalizarNit(r.nit_cc)).filter(Boolean))];
-      if (conocidos.length > 0 && !conocidos.includes(parsed.nit_cc)) {
+      if (conocidos.length === 1 && !conocidos.includes(parsed.nit_cc)) {
+        // Un solo NIT registrado (y aprobado antes) para este proveedor: se
+        // usa ese. La IA a veces "completa de memoria" el NIT de empresas
+        // conocidas cuando la foto no lo muestra (pasó con una factura de
+        // EPM) o cambia un dígito (pasó con GAMOEZ); el leído queda en el aviso.
+        avisosNit.push(`En el documento se leyó el NIT ${parsed.nit_cc}, pero ${parsed.nombre_razon_social} ya está registrado con el NIT ${conocidos[0]}: se usó el registrado. Confírmalo.`);
+        parsed.nit_leido_documento = parsed.nit_cc;
+        parsed.nit_cc = conocidos[0];
+        parsed.dv = calcularDvNit(conocidos[0]);
+      } else if (conocidos.length > 1 && !conocidos.includes(parsed.nit_cc)) {
         avisosNit.push(`${parsed.nombre_razon_social} ya está registrado con el NIT ${conocidos[0]}, y en este documento se leyó ${parsed.nit_cc}.`);
       }
     } catch (err) {
@@ -4091,8 +4125,8 @@ app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {
   }
 });
 
-// Escanear sube un PDF a esta ruta (en vez de /api/extract) porque un
-// PDF puede en teoría venir con varios documentos concatenados (un
+// Escanear sube fotos y PDF a esta ruta (en vez de /api/extract) porque
+// un archivo puede venir con varios documentos (un
 // extracto bancario seguido de varios soportes, por ejemplo) -- el
 // frontend está preparado para recibir `{ facturas: [...], otros_grupos:
 // [...] }` y avisar si detecta más de un documento en el archivo.
@@ -4117,14 +4151,13 @@ app.post('/api/extract-paquete', requireAuth, limitadorIA, async (req, res) => {
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
   try {
-    if (!isPdf) {
-      // Una foto es siempre un solo documento -- no hace falta gastar
-      // el prompt (más largo) de segmentación de paquete.
-      const parsed = await procesarExtraccionFactura(req.firmaId, base64, effectiveMediaType, isPdf, forzar);
-      return res.json({ facturas: [parsed], otros_grupos: [] });
-    }
-
+    // Fotos y PDF por igual: una foto puede traer varios documentos
+    // (ej. tres facturas pequeñas o tiquetes POS sobre la mesa).
+    const inicio = Date.now();
     const { documentos } = await procesarPaqueteDocumento(req.firmaId, base64, effectiveMediaType, forzar);
+    // Tiempos de lectura en los registros de Render (buscar "[tiempo]"):
+    // tamaño de lo que llegó y cuánto tardó la IA, para revisar demoras.
+    console.log(`[tiempo] escanear: ${(base64.length / 1e6).toFixed(1)} MB, ${documentos.length} documento(s), IA ${((Date.now() - inicio) / 1000).toFixed(1)} s`);
     const facturas = documentos.map((doc) => (doc.tipo === 'factura' ? doc.data : { error: true, mensaje: doc.mensaje }));
     res.json({ facturas, otros_grupos: [] });
   } catch (err) {

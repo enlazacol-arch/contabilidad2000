@@ -12,6 +12,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
+<script src="/comprimir-imagen.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
 <style>
@@ -318,6 +319,10 @@
   #saveAllBar .info b{ color:var(--ink); }
 
   .fila-cliente-select{ min-width:160px; }
+  .aviso-nuevas{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; justify-content:space-between;
+    margin:0 0 14px; padding:10px 14px; border:1px solid var(--pet-200); background:var(--pet-100); border-radius:var(--r-md);
+    font-size:var(--t-13); color:var(--ink); }
+  .aviso-nuevas[hidden]{ display:none; }
 </style>
 </head>
 <body>
@@ -405,6 +410,11 @@
     <div id="progressText">Procesando 0 de 0...</div>
     <div id="progressBarOuter"><div id="progressBarInner"></div></div>
     <div id="progressElapsed"></div>
+  </div>
+
+  <div id="avisoNuevas" class="aviso-nuevas" hidden>
+    <span id="avisoNuevasTexto"></span>
+    <button type="button" class="btn btn--sm secondary" id="btnAvisoNuevas">Actualizar</button>
   </div>
 
   <div id="summaryWrap">
@@ -1659,56 +1669,8 @@ function mapearItemsServidor(itemsServidor){
   });
 }
 
-// Las fotos de celular modernas pueden pesar varios MB cada una -- un
-// lote de 20-30 fotos así de una sola vez puede superar fácilmente el
-// límite del cuerpo de la petición (y antes se caía con un error poco
-// claro, como si no se pudiera leer nada). Antes de subir, cada imagen
-// (los PDF no se tocan -- no se pueden recomprimir así de fácil en el
-// navegador) se reduce a un tamaño razonable para que la IA la siga
-// leyendo perfectamente bien, mientras el lote completo pesa mucho menos.
-const COMPRESION_MAX_LADO = 2000; // px, lado más largo de la imagen
-const COMPRESION_CALIDAD = 0.82;
-const COMPRESION_UMBRAL_BYTES = 900 * 1024; // no vale la pena tocar fotos ya livianas
-
-function esImagenComprimible(file){
-  return /^image\/(jpe?g|png|webp)$/i.test(file.type || '') || /\.(jpe?g|png|webp)$/i.test(file.name || '');
-}
-
-function comprimirImagenSiHaceFalta(file){
-  if (!esImagenComprimible(file) || file.size <= COMPRESION_UMBRAL_BYTES) {
-    return Promise.resolve(file);
-  }
-  return new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      let { width, height } = img;
-      if (width > COMPRESION_MAX_LADO || height > COMPRESION_MAX_LADO) {
-        if (width >= height) {
-          height = Math.round(height * (COMPRESION_MAX_LADO / width));
-          width = COMPRESION_MAX_LADO;
-        } else {
-          width = Math.round(width * (COMPRESION_MAX_LADO / height));
-          height = COMPRESION_MAX_LADO;
-        }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      canvas.toBlob((blob) => {
-        // Si la "compresión" salió más pesada (pasa con fotos que ya
-        // venían muy comprimidas), se manda la original -- mejor eso que
-        // arriesgar perder calidad sin ganar nada de peso.
-        if (!blob || blob.size >= file.size) { resolve(file); return; }
-        resolve(new File([blob], file.name, { type: 'image/jpeg' }));
-      }, 'image/jpeg', COMPRESION_CALIDAD);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); }; // si no se puede leer como imagen, se manda tal cual
-    img.src = url;
-  });
-}
+// La compresión de fotos antes de subir vive en /comprimir-imagen.js
+// (la misma que usa Escanear).
 
 // Sube todos los archivos de una sola vez -- el servidor los recibe,
 // responde de inmediato con el id del lote, y de ahí en adelante los
@@ -1838,6 +1800,40 @@ async function refrescarLoteActivo(){
     console.warn('No se pudo actualizar el progreso del lote:', err.message);
   }
 }
+
+// Si se suben facturas desde OTRO aparato (ej. fotos en el celular)
+// mientras esta pantalla está abierta, no se enteraba hasta recargar.
+// Cada 15 s se mira si hay facturas nuevas: si la pantalla está vacía se
+// muestran solas; si ya hay facturas en revisión, se avisa con un botón
+// "Actualizar" (para no redibujar mientras el contador está editando).
+async function revisarFacturasNuevas(){
+  if (document.hidden || pollingHandle) return; // ya se está actualizando solo
+  try {
+    const res = await fetch('/api/lotes/activo' + (clientePreseleccionado ? '?cliente=' + encodeURIComponent(clientePreseleccionado.id) : ''));
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data) return;
+    const enPantalla = new Set(lote.map((it) => String(it.id)));
+    const nuevas = (data.items || []).filter((it) => !enPantalla.has(String(it.id))).length;
+    const enCurso = data.estado === 'en_cola' || data.estado === 'procesando';
+    if (lote.length === 0 && (nuevas > 0 || enCurso)) { refrescarLoteActivo(); return; }
+    const aviso = document.getElementById('avisoNuevas');
+    if (nuevas > 0 || enCurso) {
+      document.getElementById('avisoNuevasTexto').textContent = enCurso
+        ? 'Se están leyendo facturas que subiste desde otro aparato.'
+        : `Hay ${nuevas} factura${nuevas === 1 ? '' : 's'} nueva${nuevas === 1 ? '' : 's'} (subida${nuevas === 1 ? '' : 's'} desde otro aparato).`;
+      aviso.hidden = false;
+    } else {
+      aviso.hidden = true;
+    }
+  } catch (e) { /* sin red por un momento -- se reintenta en el próximo ciclo */ }
+}
+setInterval(revisarFacturasNuevas, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarFacturasNuevas(); });
+document.getElementById('btnAvisoNuevas').addEventListener('click', () => {
+  document.getElementById('avisoNuevas').hidden = true;
+  refrescarLoteActivo();
+});
 
 function iniciarPolling(){
   if (pollingHandle) { clearInterval(pollingHandle); pollingHandle = null; }
