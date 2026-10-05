@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
+<script src="/pendientes.js"></script>
 <style>
   .wrap{ max-width:1240px; }
 
@@ -683,7 +684,7 @@ function renderClients(){
           <div class="name"><a href="/cliente.html?id=${c.id}" style="color:inherit; text-decoration:none;">${escapeHtml(c.nombre)}</a></div>
           <div class="nit">NIT ${escapeHtml(c.nit)}${c.dv ? '-' + escapeHtml(c.dv) : ''}</div>
         </div>
-        <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
+        <div class="stats">${typeof badgePendientesHtml === 'function' ? badgePendientesHtml(c.id) + ' ' : ''}${count} factura${count !== 1 ? 's' : ''}</div>
         <div class="row-actions">
           <a class="del-btn ficha-btn" href="/cliente.html?id=${c.id}">ver ficha →</a>
           ${puedeEscribir(miRol) ? `<button class="del-btn edit-btn" data-action="editar" data-id="${c.id}">editar</button>` : ''}
@@ -981,7 +982,8 @@ async function loadAll(){
   try {
     const [clientsRes, invoicesRes] = await Promise.all([
       fetch('/api/clients'),
-      fetch('/api/invoices')
+      fetch('/api/invoices'),
+      typeof cargarPendientes === 'function' ? cargarPendientes() : null,
     ]);
     clients = await clientsRes.json();
     allInvoices = await invoicesRes.json();

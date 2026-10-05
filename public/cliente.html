@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
+<script src="/pendientes.js"></script>
 <script src="/estadisticas.js"></script>
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
@@ -209,6 +210,7 @@
   <div id="notFound" style="display:none;">No encontramos ese cliente. <a href="/">Vuelve a Inicio</a> y selecciona uno de la lista.</div>
 
   <div id="content" style="display:none;">
+    <div id="pendientesFicha"></div>
     <div class="cliente-header reveal">
       <div>
         <h2 id="clienteNombre">—</h2>
@@ -484,6 +486,14 @@ async function cargarYRenderizar(){
   if (cliente.agente_retenedor_ica) metaPartes.push('<span class="badge-retenedor">● Agente retenedor ICA</span>');
   if (cliente.agente_retenedor_iva) metaPartes.push('<span class="badge-retenedor">● Agente retenedor IVA</span>');
   document.getElementById('clienteMeta').innerHTML = metaPartes.join('');
+
+  // ---- Pendientes por revisar de este cliente (de cualquier persona de la firma) ----
+  if (typeof cargarPendientes === 'function') {
+    cargarPendientes().then(() => {
+      const el = document.getElementById('pendientesFicha');
+      el.innerHTML = avisoPendientesHtml(cliente.id);
+    });
+  }
 
   // ---- PUC personalizado -- independiente de si ya tiene facturas ----
   cargarPuc(cliente);

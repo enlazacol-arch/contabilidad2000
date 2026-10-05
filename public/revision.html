@@ -314,8 +314,12 @@ function parseConfianza(inv){
 
 let soloConExcepciones = false;
 
+// ?cliente=ID (desde la ficha del cliente): solo las de ese cliente.
+const clienteFiltroRevision = new URLSearchParams(window.location.search).get('cliente');
+
 function pendientesFiltradas(){
   let pendientes = allInvoices.filter((inv) => !inv.aprobado_por_contador);
+  if (clienteFiltroRevision) pendientes = pendientes.filter((inv) => inv.cliente_id === clienteFiltroRevision);
   if (soloConExcepciones) pendientes = pendientes.filter((inv) => listaExcepciones(inv).length > 0);
   const q = filtroTexto.trim().toLowerCase();
   if (!q) return pendientes;

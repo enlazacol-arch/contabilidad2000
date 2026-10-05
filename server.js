@@ -5212,6 +5212,63 @@ app.get('/api/lotes/mios', requireAuth, async (req, res) => {
   }
 });
 
+// Pendientes por revisar, por cliente, de TODA la firma (respetando los
+// clientes asignados): para que se sepa que hay trabajo a medias aunque lo
+// haya dejado otra persona (ej. Mafe leyó facturas de Bosques y otro
+// contador de Codcol).
+//   leidas: facturas leídas en Escanear/Carga masiva que todavía no se
+//     guardan ni se quitan (últimos 30 días), por quién las subió;
+//   borradores: guardadas pero sin aprobar (esperan en Revisión).
+app.get('/api/pendientes', requireAuth, async (req, res) => {
+  try {
+    const [leidas, borradores] = await Promise.all([
+      pool.query(
+        `SELECT lp.cliente_id AS cliente_lote, li.cliente_id_detectado AS cliente_detectado, lp.usuario_id,
+                u.nombre AS usuario_nombre, u.email AS usuario_email, COUNT(*) AS cantidad, MIN(li.created_at) AS desde
+           FROM lote_items li
+           JOIN lotes_procesamiento lp ON lp.id = li.lote_id
+           LEFT JOIN users u ON u.id = lp.usuario_id
+          WHERE lp.contador_id = $1 AND li.eliminado = false
+            AND li.estado IN ('listo', 'revisar', 'error', 'duplicado', 'pendiente', 'procesando')
+            AND lp.created_at > $2
+          GROUP BY lp.cliente_id, li.cliente_id_detectado, lp.usuario_id, u.nombre, u.email`,
+        [req.firmaId, new Date(Date.now() - 30 * 86400000)]
+      ),
+      pool.query(
+        `SELECT cliente_id, COUNT(*) AS cantidad FROM invoices
+          WHERE contador_id = $1 AND aprobado_por_contador = false GROUP BY cliente_id`,
+        [req.firmaId]
+      ),
+    ]);
+    const porCliente = new Map();
+    const de = (clienteId) => {
+      const k = clienteId || '';
+      if (!porCliente.has(k)) porCliente.set(k, { cliente_id: clienteId || null, leidas: [], leidas_total: 0, borradores: 0 });
+      return porCliente.get(k);
+    };
+    for (const r of leidas.rows) {
+      // El cliente del lote; si se subió sin cliente fijo, el detectado.
+      const clienteId = r.cliente_lote || r.cliente_detectado || null;
+      if (!puedeAccederCliente(req, clienteId)) continue;
+      const p = de(clienteId);
+      const cantidad = Number(r.cantidad) || 0;
+      const usuario = String(r.usuario_nombre || '').trim() || String(r.usuario_email || '').trim() || 'Sin usuario';
+      const previa = p.leidas.find((l) => l.usuario_id === r.usuario_id);
+      if (previa) { previa.cantidad += cantidad; if (r.desde < previa.desde) previa.desde = r.desde; }
+      else p.leidas.push({ usuario_id: r.usuario_id, usuario, propias: r.usuario_id === req.userId || !r.usuario_id, cantidad, desde: r.desde });
+      p.leidas_total += cantidad;
+    }
+    for (const r of borradores.rows) {
+      if (!puedeAccederCliente(req, r.cliente_id)) continue;
+      de(r.cliente_id).borradores += Number(r.cantidad) || 0;
+    }
+    res.json([...porCliente.values()].filter((p) => p.leidas_total > 0 || p.borradores > 0));
+  } catch (err) {
+    console.error('Error leyendo los pendientes por cliente:', err);
+    res.status(500).json({ error: 'No se pudieron consultar los pendientes.' });
+  }
+});
+
 // El lote (padre) de un ítem puede no tener cliente fijo (cliente_id
 // NULL) pero cada documento ya trae su propio cliente_id_detectado --
 // para un miembro restringido, cualquiera de los dos que apunte a un
