@@ -13,6 +13,7 @@
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
 <script src="/comprimir-imagen.js"></script>
+<script src="/qr-celular.js"></script>
 <script src="/motivo-sin-retencion.js"></script>
 <script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
@@ -2642,6 +2643,16 @@ btnGuardarTodas.addEventListener('click', async () => {
   }, avisos.length > 0 ? 4500 : 2500);
 });
 
+// En un computador se ofrece, junto a la zona de carga, el código QR
+// para fotografiar facturas en papel con el celular (ver /qr-celular.js);
+// esas fotos llegan a esta misma pantalla ("subidas desde otro aparato").
+function montarQrCelular(){
+  if (!puedeEscribir(miRol) || !QrCelular.esComputador()) return;
+  const cont = document.createElement('div');
+  document.getElementById('uploadZone').insertAdjacentElement('afterend', cont);
+  QrCelular.montar(cont, { clientes: myClients, clienteId: clientePreseleccionado ? clientePreseleccionado.id : '' });
+}
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -2666,6 +2677,7 @@ async function requireAuthAndInit(){
     const clientsRes = await fetch('/api/clients');
     myClients = clientsRes.ok ? await clientsRes.json() : [];
     aplicarClientePreseleccionado();
+    montarQrCelular();
     try {
       const tarifasRes = await fetch('/api/tarifas-aprendidas');
       if (tarifasRes.ok) {

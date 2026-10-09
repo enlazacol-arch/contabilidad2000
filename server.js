@@ -9,6 +9,9 @@ const { Pool } = require('pg');
 const integraciones = require('./integraciones');
 const cartera = require('./cartera');
 const lotes = require('./public/lotes');
+const capturaMovil = require('./captura-movil');
+const QRCode = require('qrcode');
+const os = require('os');
 const { cabecerasSeguridad, crearCors, crearLimitador } = require('./seguridad');
 // Única fuente de verdad de tarifas de retención (ver public/retenciones.js
 // -- se carga como <script> en el navegador Y aquí con require(), misma
@@ -5334,6 +5337,122 @@ app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- Captura desde el celular (código QR) ----------
+// Ver captura-movil.js. Las tres primeras rutas son del computador (con
+// sesión); las dos últimas las usa /captura-movil.html en el celular,
+// SIN sesión: el token del QR es lo único que las autoriza.
+
+app.post('/api/captura-movil', requireAuth, async (req, res) => {
+  try {
+    const clienteId = req.body && req.body.clienteId ? String(req.body.clienteId) : '';
+    if (!clienteId) return res.status(400).json({ error: 'Escoge primero el cliente al que van las fotos.' });
+    if (!(await clienteEsDelContador(req, clienteId))) return res.status(404).json({ error: 'Cliente no encontrado.' });
+    const sesion = await capturaMovil.crearSesion(pool, { contadorId: req.firmaId, usuarioId: req.userId, clienteId });
+    const base = capturaMovil.urlBase({
+      appUrl: process.env.APP_URL,
+      protocolo: req.protocol,
+      host: req.get('host'),
+      ipLocal: capturaMovil.ipRedLocal(os.networkInterfaces()),
+    });
+    const url = capturaMovil.urlCaptura(base, sesion.token);
+    const qrSvg = await QRCode.toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+    res.status(201).json({
+      id: sesion.id,
+      url,
+      qrSvg,
+      expiraAt: sesion.expiraAt,
+      // Aviso para desarrollo: un QR a una IP local solo abre en un
+      // celular conectado a la misma red Wi-Fi que este computador.
+      redLocal: !process.env.APP_URL && /^http:\/\/(10|172\.(1[6-9]|2\d|3[01])|192\.168)\./.test(base),
+    });
+  } catch (err) {
+    console.error('Error creando el QR de captura:', err);
+    res.status(500).json({ error: 'No se pudo generar el código QR.' });
+  }
+});
+
+app.get('/api/captura-movil/:id', requireAuth, async (req, res) => {
+  try {
+    const sesion = await capturaMovil.buscarDelUsuario(pool, req.params.id, req.userId);
+    if (!sesion) return res.status(404).json({ error: 'Código QR no encontrado.' });
+    res.json({ estado: capturaMovil.estadoSesion(sesion), fotosRecibidas: sesion.fotos_recibidas, expiraAt: sesion.expira_at });
+  } catch (err) {
+    res.status(500).json({ error: 'No se pudo consultar el código QR.' });
+  }
+});
+
+app.delete('/api/captura-movil/:id', requireAuth, async (req, res) => {
+  try {
+    const ok = await capturaMovil.revocar(pool, req.params.id, req.userId);
+    if (!ok) return res.status(404).json({ error: 'Código QR no encontrado.' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'No se pudo desactivar el código QR.' });
+  }
+});
+
+// Sin sesión: se limita por IP, aparte del límite general de /api.
+const limitadorCapturaMovil = crearLimitador({
+  ventanaMs: 15 * 60 * 1000,
+  maximo: 150,
+  mensaje: 'Demasiadas fotos en poco tiempo -- espera unos minutos e intenta de nuevo.',
+});
+
+// El token va en la cabecera (no en la URL) para que no quede en logs.
+function tokenCaptura(req) {
+  return String(req.get('x-captura-token') || '');
+}
+
+app.get('/api/captura-movil-publica', limitadorCapturaMovil, async (req, res) => {
+  try {
+    const sesion = await capturaMovil.buscarPorToken(pool, tokenCaptura(req));
+    let estado = capturaMovil.estadoSesion(sesion);
+    if (estado === 'activa' && !(await capturaMovil.usuarioSigueAutorizado(pool, sesion))) estado = 'revocada';
+    if (estado !== 'activa') return res.status(410).json({ estado, error: capturaMovil.MENSAJES_ESTADO[estado] });
+    res.json({
+      estado,
+      clienteNombre: sesion.cliente_nombre || '',
+      expiraAt: sesion.expira_at,
+      fotosRecibidas: sesion.fotos_recibidas,
+    });
+  } catch (err) {
+    console.error('Error validando el QR de captura:', err);
+    res.status(500).json({ error: 'No se pudo validar el código QR.' });
+  }
+});
+
+app.post('/api/captura-movil-publica/fotos', limitadorCapturaMovil, async (req, res) => {
+  try {
+    const sesion = await capturaMovil.buscarPorToken(pool, tokenCaptura(req));
+    let estado = capturaMovil.estadoSesion(sesion);
+    if (estado === 'activa' && !(await capturaMovil.usuarioSigueAutorizado(pool, sesion))) estado = 'revocada';
+    if (estado !== 'activa') return res.status(410).json({ estado, error: capturaMovil.MENSAJES_ESTADO[estado] });
+
+    const { nombre, base64, mediaType } = req.body || {};
+    const errorArchivo = capturaMovil.validarArchivo({ base64, mediaType });
+    if (errorArchivo) return res.status(400).json({ error: errorArchivo });
+
+    const numero = await capturaMovil.reservarFoto(pool, sesion.id);
+    if (numero === null) return res.status(410).json({ estado: 'vencida', error: capturaMovil.MENSAJES_ESTADO.vencida });
+    try {
+      const tipo = String(mediaType).toLowerCase();
+      await lotes.agregarArchivoALote(sesion.lote_id, sesion.contador_id, sesion.cliente_id, sesion.usuario_id, {
+        nombre: String(nombre || `foto-celular-${numero}.jpg`).slice(0, 200),
+        base64: String(base64),
+        mediaType: tipo,
+        isPdf: tipo === 'application/pdf',
+      });
+    } catch (err) {
+      await capturaMovil.liberarFoto(pool, sesion.id);
+      throw err;
+    }
+    res.status(201).json({ ok: true, fotosRecibidas: numero });
+  } catch (err) {
+    console.error('Error recibiendo foto desde el celular:', err);
+    res.status(500).json({ error: 'No se pudo recibir la foto. Intenta de nuevo.' });
+  }
+});
+
 // OJO -- antes `ensureSchema()`/`lotes.init()` corrían DENTRO del
 // callback de `app.listen()`, lo que significa que Express ya estaba
 // aceptando conexiones (el puerto queda abierto en cuanto se llama
@@ -5352,6 +5471,7 @@ app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
     await ensureSchema();
     lotes.init({ pool, crypto, procesarExtraccionFactura, procesarPaqueteDocumento, detectarClienteYMovimientoServidor });
     await lotes.asegurarSchemaLotes();
+    await capturaMovil.asegurarSchema(pool);
   } catch (err) {
     console.error('\n[ERROR] No se pudo conectar/preparar la base de datos:', err.message);
     console.error('Verifica que tu DATABASE_URL en .env sea correcta.\n');
