@@ -618,7 +618,10 @@ function guardarEdicionesPendientes(mapa){
 function guardarEdicionItem(item){
   if (!item || !item.id) return;
   const mapa = leerEdicionesPendientes();
-  mapa[item.id] = { data: item.data, clienteId: item.clienteId, tipoMovimiento: item.tipoMovimiento, estado: item.estado };
+  // reteFuenteTocado también: sin él, al refrescar la bandeja el selector
+  // de tarifa creía que un valor escrito a mano era un cálculo viejo y lo
+  // reemplazaba por el recomendado.
+  mapa[item.id] = { data: item.data, clienteId: item.clienteId, tipoMovimiento: item.tipoMovimiento, estado: item.estado, reteFuenteTocado: !!item.reteFuenteTocado };
   guardarEdicionesPendientes(mapa);
 }
 function borrarEdicionItem(id){
@@ -1295,6 +1298,15 @@ function actualizarEstimadosRetencionMasivo(){
       // input más abajo) es el mismo criterio que ya usa Escanear con su
       // variable global `reteFuenteTocado`, aplicado por item.
       renderSelectorTarifaFuente(estFuenteEl, d.categoria_concepto, sugerido, fuenteInput, !!itemAbierto.reteFuenteTocado);
+      // El selector puede dejar puesta sola la tarifa recomendada en el
+      // campo -- antes solo cambiaba lo que se VEÍA, no item.data, y la
+      // factura se guardaba con la Rete Fuente anterior (casi siempre $0).
+      // Lo que se ve es lo que se guarda.
+      const fuenteVisible = parseMoneyValue(fuenteInput.value);
+      if (fuenteVisible !== (Number(d.rete_fuente) || 0)) {
+        d.rete_fuente = fuenteVisible;
+        guardarEdicionItem(itemAbierto);
+      }
     } else if (sugerido && parseMoneyValue(fuenteInput.value) === 0) {
       const texto = sugerido.mismaTarifa
         ? `$${sugerido.bajo.toLocaleString('es-CO')}`
@@ -1771,6 +1783,7 @@ async function refrescarLoteActivo(){
         it.clienteId = edicion.clienteId;
         it.tipoMovimiento = edicion.tipoMovimiento;
         it.estado = edicion.estado;
+        it.reteFuenteTocado = !!edicion.reteFuenteTocado;
       }
     });
     // Limpieza: una corrección guardada localmente para un ítem que ya
@@ -1782,6 +1795,15 @@ async function refrescarLoteActivo(){
       if (!idsEnLoteActual.has(String(id))) { delete edicionesPendientes[id]; seModificaronEdiciones = true; }
     });
     if (seModificaronEdiciones) guardarEdicionesPendientes(edicionesPendientes);
+
+    // Si hay una factura abierta en el modal, se engancha a su versión
+    // nueva (que ya trae encima sus correcciones, ver arriba) -- si no,
+    // lo que el contador siga escribiendo iría a parar al objeto viejo,
+    // que ya no está en `lote`, y no se guardaría.
+    if (itemAbierto) {
+      const nuevo = lote.find((it) => String(it.id) === String(itemAbierto.id));
+      if (nuevo) itemAbierto = nuevo;
+    }
 
     const enCurso = data.estado === 'en_cola' || data.estado === 'procesando';
     progressArea.classList.toggle('show', enCurso);
