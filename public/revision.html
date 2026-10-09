@@ -276,6 +276,18 @@ function escapeHtml(str){
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+// Los campos de valores se escriben como en Colombia: "121.904" son
+// ciento veintiún mil novecientos cuatro. Antes eran <input type=number>
+// y en el celular "121.904" quedaba como 121,904 (con decimales): el
+// subtotal casi no cambiaba y el valor se guardaba mal.
+function pesosDeTexto(v){
+  const limpio = String(v == null ? '' : v).replace(/\./g, '').replace(/,\d{0,2}$/, '').replace(/[^\d-]/g, '');
+  return limpio === '' ? 0 : Number(limpio);
+}
+function textoDePesos(n){
+  return (Number(n) || 0).toLocaleString('es-CO');
+}
+
 function formatCOP(value){
   const num = Number(value);
   if (isNaN(num)) return value || '—';
@@ -334,6 +346,42 @@ let itemsEnEdicion = null;
 // contable (cuenta, débito, crédito) -- null cuando no se está
 // editando el asiento.
 let lineasAsientoEnEdicion = null;
+// Lo escrito en la cabecera del formulario de edición (fecha, IVA,
+// retenciones...) -- antes, agregar/quitar un ítem, editar el asiento o
+// que terminara de cargar el detalle redibujaba el formulario con los
+// valores ORIGINALES y se perdía lo escrito. Se guarda aquí antes de
+// redibujar y se vuelve a poner después.
+let cabeceraEnEdicion = null;
+const CAMPOS_CABECERA_EDICION = ['editFecha', 'editSubtotal', 'editIva', 'editCategoria', 'editSubcuenta', 'editReteFuente', 'editReteIva', 'editReteIca'];
+// true cuando un botón (agregar/quitar ítem o línea) ya leyó el formulario
+// y dejó su versión modificada -- no se vuelve a leer del DOM viejo.
+let itemsYaLeidos = false;
+let lineasYaLeidas = false;
+
+function capturarEdicionEnCurso(){
+  if (editandoFactura && document.getElementById('editIva')) {
+    cabeceraEnEdicion = {};
+    CAMPOS_CABECERA_EDICION.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) cabeceraEnEdicion[id] = el.value;
+    });
+    if (!itemsYaLeidos && document.querySelector('.ef-item-row')) itemsEnEdicion = leerItemsDelFormulario();
+  }
+  if (lineasAsientoEnEdicion !== null && !lineasYaLeidas && document.querySelector('.asi-linea-row')) {
+    lineasAsientoEnEdicion = leerLineasAsientoDelFormulario();
+  }
+  itemsYaLeidos = false;
+  lineasYaLeidas = false;
+}
+function restaurarCabeceraEnEdicion(){
+  if (!editandoFactura || !cabeceraEnEdicion) return;
+  CAMPOS_CABECERA_EDICION.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && cabeceraEnEdicion[id] !== undefined && [...(el.options || [{ value: cabeceraEnEdicion[id] }])].some((o) => o.value === cabeceraEnEdicion[id])) {
+      el.value = cabeceraEnEdicion[id];
+    }
+  });
+}
 
 function parseConfianza(inv){
   try {
@@ -563,7 +611,9 @@ function renderFichaFactura(inv){
   const traza = (inv.modelo_ia || inv.version_prompt)
     ? `<div class="fd-trazabilidad">Leído por ${escapeHtml(inv.modelo_ia) || '—'}${inv.version_prompt ? ` · prompt ${escapeHtml(inv.version_prompt)}` : ''}</div>`
     : '';
-  return `<div class="factura-detalle"><div class="fd-table">${filas}</div>${traza}</div>`;
+  // Lo que de verdad se le paga al proveedor (total − retenciones − abonado).
+  const filaNeto = `<div class="fd-row"><div class="fd-label">Valor a pagar</div><div class="fd-value money"><b>${escapeHtml(textoNetoAPagar(inv))}</b></div></div>`;
+  return `<div class="factura-detalle"><div class="fd-table">${filas}${filaNeto}</div>${traza}</div>`;
 }
 
 // Opciones de categoría/subcuenta -- misma tabla que ya usa Escanear
@@ -608,7 +658,7 @@ function campoSubcuentaHtml(categoria, seleccionada, attrs, forzarManual){
 function leerItemsDelFormulario(){
   return [...document.querySelectorAll('.ef-item-row')].map((row) => ({
     descripcion: row.querySelector('.ef-item-desc').value,
-    subtotal: row.querySelector('.ef-item-subtotal').value,
+    subtotal: String(pesosDeTexto(row.querySelector('.ef-item-subtotal').value)),
     categoria_concepto: row.querySelector('.ef-item-categoria').value,
     subcuenta_gasto: row.querySelector('.ef-item-subcuenta').value,
   }));
@@ -634,14 +684,14 @@ function renderFormularioEdicionFactura(inv){
   const campoNumero = (id, label, valor) => `
     <div class="field">
       <label class="ef-label">${label}</label>
-      <input class="input input--num-font" type="number" id="${id}" value="${Number(valor) || 0}" min="0" step="1"
+      <input class="input input--num-font money" type="text" inputmode="numeric" id="${id}" value="${textoDePesos(valor)}"
         >
     </div>`;
 
   const filasItems = itemsFuente.map((it, idx) => `
     <div class="ef-item-row" data-idx="${idx}" style="display:grid; grid-template-columns:2fr 1fr 1.3fr 1.3fr auto; gap:8px; align-items:end; margin-bottom:8px;">
       <div class="field"><label class="ef-label">Descripción</label><input type="text" class="ef-item-desc input" value="${escapeHtml(it.descripcion)}" ></div>
-      <div class="field"><label class="ef-label">Subtotal</label><input type="number" class="ef-item-subtotal input input--num-font" value="${Number(it.subtotal) || 0}" min="0" step="1" ></div>
+      <div class="field"><label class="ef-label">Subtotal</label><input type="text" inputmode="numeric" class="ef-item-subtotal input input--num-font money" value="${textoDePesos(it.subtotal)}" ></div>
       <div class="field"><label class="ef-label">Categoría</label><select class="ef-item-categoria select" >${opcionesCategoria(it.categoria_concepto)}</select></div>
       <div class="field"><label class="ef-label">Subcuenta</label>${campoSubcuentaHtml(it.categoria_concepto, it.subcuenta_gasto, 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:var(--r-sm); font-size:var(--t-12);"')}</div>
       <button type="button" class="btn ghost ef-item-quitar btn--sm" title="Quitar ítem" >✕</button>
@@ -681,6 +731,7 @@ function renderFormularioEdicionFactura(inv){
         <button type="button" class="btn ghost btn--sm" id="btnAgregarItem" style="margin-top:4px;">+ Agregar ítem</button>
       </div>
     ` : ''}
+    <div class="ef-label" id="efTotalCalculado" style="margin-top:12px; font-size:var(--t-13); text-transform:none; letter-spacing:0;"></div>
     <div style="display:flex; gap:8px; margin-top:16px;">
       <button type="button" class="btn secondary btn--sm" id="btnGuardarFactura" >Guardar cambios</button>
       <button type="button" class="btn ghost btn--sm" id="btnCancelarEdicionFactura" >Cancelar</button>
@@ -697,8 +748,8 @@ function filaLineaAsientoHtml(l, idx, esLaUnica){
   return `<div class="asi-linea-row" data-idx="${idx}" style="display:grid; grid-template-columns:100px 1.6fr 110px 110px auto; gap:8px; align-items:end; margin-bottom:8px;">
     <div class="field"><label class="ef-label">Código</label><input type="text" class="asi-cuenta-codigo input input--num-font" value="${escapeHtml(l.cuenta_codigo || '')}" ></div>
     <div class="field"><label class="ef-label">Nombre cuenta</label><input type="text" class="asi-cuenta-nombre input" value="${escapeHtml(l.cuenta_nombre || '')}" ></div>
-    <div class="field"><label class="ef-label">Débito</label><input type="number" class="asi-debito input input--num-font" value="${Number(l.debito) || 0}" min="0" step="1" ></div>
-    <div class="field"><label class="ef-label">Crédito</label><input type="number" class="asi-credito input input--num-font" value="${Number(l.credito) || 0}" min="0" step="1" ></div>
+    <div class="field"><label class="ef-label">Débito</label><input type="text" inputmode="numeric" class="asi-debito input input--num-font money" value="${textoDePesos(l.debito)}" ></div>
+    <div class="field"><label class="ef-label">Crédito</label><input type="text" inputmode="numeric" class="asi-credito input input--num-font money" value="${textoDePesos(l.credito)}" ></div>
     <button type="button" class="btn ghost asi-linea-quitar btn--sm" title="Quitar línea"  ${esLaUnica ? 'disabled' : ''}>✕</button>
   </div>`;
 }
@@ -709,8 +760,8 @@ function leerLineasAsientoDelFormulario(){
   return [...document.querySelectorAll('.asi-linea-row')].map((row) => ({
     cuenta_codigo: row.querySelector('.asi-cuenta-codigo').value,
     cuenta_nombre: row.querySelector('.asi-cuenta-nombre').value,
-    debito: row.querySelector('.asi-debito').value,
-    credito: row.querySelector('.asi-credito').value,
+    debito: String(pesosDeTexto(row.querySelector('.asi-debito').value)),
+    credito: String(pesosDeTexto(row.querySelector('.asi-credito').value)),
   }));
 }
 
@@ -780,7 +831,14 @@ function renderAsientoSeccion(inv){
 function renderExcepcionesSeccion(inv){
   const excepciones = listaExcepciones(inv);
   if (excepciones.length === 0) return '';
-  const filas = excepciones.map((e) => `<div class="exc-detalle"><b>${escapeHtml(e.etiqueta)}</b>${escapeHtml(e.detalle)}</div>`).join('');
+  // El de letras ≠ números se puede dar por revisado (ej. error de
+  // imprenta del proveedor): si no, seguiría ahí aunque el contador ya
+  // confirmó que los números están bien.
+  const filas = excepciones.map((e) => `<div class="exc-detalle"><b>${escapeHtml(e.etiqueta)}</b>${escapeHtml(e.detalle)}`
+    + (e.tipo === 'letras_no_coincide' && puedeAdministrar(miRol)
+      ? ` <button type="button" class="btn ghost btn--sm" id="btnLetrasRevisado" style="margin-top:6px;">Ya lo revisé, los números están bien</button>`
+      : '')
+    + `</div>`).join('');
   return `<div class="det-seccion"><h3>Excepciones detectadas</h3>${filas}</div>`;
 }
 
@@ -806,12 +864,14 @@ function renderDetalle(){
   if (asientoDeFacturaId !== inv.id) {
     editandoFactura = false;
     itemsEnEdicion = null;
+    cabeceraEnEdicion = null;
     lineasAsientoEnEdicion = null;
     cargarAsientoDeFactura(inv.id); // vuelve a llamar a renderDetalle()
     return;
   }
   vacio.style.display = 'none';
   cont.style.display = 'block';
+  capturarEdicionEnCurso();
 
   cont.innerHTML = `
     <div class="det-head">
@@ -820,7 +880,7 @@ function renderDetalle(){
         <div class="det-sub">NIT ${escapeHtml(inv.nit_cc) || '—'} · ${escapeHtml(inv.fecha_factura) || '—'} · ${inv.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso'}</div>
       </div>
       <div class="det-acciones">
-        ${(puedeAdministrar(miRol) && !editandoFactura) ? '<button type="button" class="btn ghost btn--sm" id="btnEditarFactura" >✎ Editar factura</button>' : ''}
+        ${(puedeAdministrar(miRol) && !editandoFactura) ? `<button type="button" class="btn ghost btn--sm" id="btnEditarFactura" ${asientoActual === 'cargando' ? 'disabled title="Cargando los ítems de la factura…"' : ''}>✎ Editar factura</button>` : ''}
         ${puedeAdministrar(miRol) ? '<button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>' : ''}
       </div>
     </div>
@@ -841,6 +901,9 @@ function renderDetalle(){
     ${renderTarifaSeccion(inv)}
   `;
 
+  restaurarCabeceraEnEdicion();
+  actualizarTotalEdicion();
+
   // Mes contable: obligatorio para aprobar. Se guarda apenas se elige
   // (sin esperar a "Guardar"), para que no se pierda si se cambia de factura.
   const mesInput = renderSelectorMesContable(document.getElementById('detMesContable'), {
@@ -850,6 +913,9 @@ function renderDetalle(){
     alCambiar: (mes) => guardarMesContable(inv.id, mes),
   });
   if (mesInput && !puedeAdministrar(miRol)) mesInput.disabled = true;
+
+  const btnLetrasRevisado = document.getElementById('btnLetrasRevisado');
+  if (btnLetrasRevisado) btnLetrasRevisado.addEventListener('click', () => marcarLetrasRevisado(inv.id, btnLetrasRevisado));
 
   const btnEditarAsiento = document.getElementById('btnEditarAsiento');
   if (btnEditarAsiento) btnEditarAsiento.addEventListener('click', () => {
@@ -868,6 +934,7 @@ function renderDetalle(){
     const actuales = leerLineasAsientoDelFormulario();
     actuales.push({ cuenta_codigo: '', cuenta_nombre: '', debito: 0, credito: 0 });
     lineasAsientoEnEdicion = actuales;
+    lineasYaLeidas = true;
     renderDetalle();
   });
   const asientoLineasEdicionEl = document.getElementById('asientoLineasEdicion');
@@ -878,6 +945,7 @@ function renderDetalle(){
       const actuales = leerLineasAsientoDelFormulario();
       actuales.splice(idx, 1);
       lineasAsientoEnEdicion = actuales;
+      lineasYaLeidas = true;
       renderDetalle();
     });
   }
@@ -887,12 +955,15 @@ function renderDetalle(){
   if (btnEditarFactura) btnEditarFactura.addEventListener('click', () => {
     editandoFactura = true;
     itemsEnEdicion = itemsActuales.map((it) => ({ ...it }));
+    itemsYaLeidos = true;
+    cabeceraEnEdicion = null;
     renderDetalle();
   });
   const btnCancelarEdicion = document.getElementById('btnCancelarEdicionFactura');
   if (btnCancelarEdicion) btnCancelarEdicion.addEventListener('click', () => {
     editandoFactura = false;
     itemsEnEdicion = null;
+    cabeceraEnEdicion = null;
     renderDetalle();
   });
   const btnGuardarFactura = document.getElementById('btnGuardarFactura');
@@ -924,7 +995,7 @@ function renderDetalle(){
       if (!e.target.classList.contains('ef-item-subtotal')) return;
       const totalEl = document.getElementById('efSubtotalCalculado');
       if (!totalEl) return;
-      const suma = [...efItemsLista.querySelectorAll('.ef-item-subtotal')].reduce((t, el) => t + (Number(el.value) || 0), 0);
+      const suma = [...efItemsLista.querySelectorAll('.ef-item-subtotal')].reduce((t, el) => t + pesosDeTexto(el.value), 0);
       totalEl.textContent = '$' + suma.toLocaleString('es-CO');
     });
     efItemsLista.addEventListener('change', (e) => {
@@ -949,6 +1020,7 @@ function renderDetalle(){
         const actuales = leerItemsDelFormulario();
         actuales.splice(idx, 1);
         itemsEnEdicion = actuales;
+        itemsYaLeidos = true;
         renderDetalle();
       }
     });
@@ -959,6 +1031,7 @@ function renderDetalle(){
     const opcionesOtro = SUBCUENTAS_GASTO['otro'];
     actuales.push({ descripcion: '', subtotal: 0, categoria_concepto: 'otro', subcuenta_gasto: opcionesOtro[0] ? opcionesOtro[0][0] : '' });
     itemsEnEdicion = actuales;
+    itemsYaLeidos = true;
     renderDetalle();
   });
 }
@@ -968,6 +1041,25 @@ function renderDetalle(){
 // :id/items) -- en ese orden, porque el IVA de cabecera que se acaba de
 // guardar es justo lo que el segundo PUT usa para reprorratear. El
 // backend ya recalcula el asiento contable solo en ambos casos.
+// "Total (subtotal + IVA)" del formulario de edición, en vivo -- para
+// ver de una vez el efecto de cambiar un ítem o el IVA.
+function actualizarTotalEdicion(){
+  const el = document.getElementById('efTotalCalculado');
+  if (!el) return;
+  const filas = [...document.querySelectorAll('.ef-item-subtotal')];
+  const subtotal = filas.length > 0
+    ? filas.reduce((t, x) => t + pesosDeTexto(x.value), 0)
+    : pesosDeTexto((document.getElementById('editSubtotal') || {}).value);
+  const iva = pesosDeTexto((document.getElementById('editIva') || {}).value);
+  const neto = textoNetoAPagar({
+    valor_con_iva: subtotal + iva,
+    rete_fuente: pesosDeTexto((document.getElementById('editReteFuente') || {}).value),
+    rete_iva: pesosDeTexto((document.getElementById('editReteIva') || {}).value),
+    rete_ica: pesosDeTexto((document.getElementById('editReteIca') || {}).value),
+  });
+  el.innerHTML = `Total con IVA: <b>$${textoDePesos(subtotal + iva)}</b> <span style="color:var(--ink-faint);">(subtotal $${textoDePesos(subtotal)} + IVA $${textoDePesos(iva)})</span><br>Valor a pagar: <b>${escapeHtml(neto)}</b>`;
+}
+
 async function guardarFactura(invoiceId, btn){
   const tieneItems = itemsActuales.length > 0;
   btn.disabled = true;
@@ -976,13 +1068,13 @@ async function guardarFactura(invoiceId, btn){
   try {
     const payloadHeader = {
       fecha_factura: document.getElementById('editFecha').value,
-      valor_iva: document.getElementById('editIva').value,
-      rete_fuente: document.getElementById('editReteFuente').value,
-      rete_iva: document.getElementById('editReteIva').value,
-      rete_ica: document.getElementById('editReteIca').value,
+      valor_iva: String(pesosDeTexto(document.getElementById('editIva').value)),
+      rete_fuente: String(pesosDeTexto(document.getElementById('editReteFuente').value)),
+      rete_iva: String(pesosDeTexto(document.getElementById('editReteIva').value)),
+      rete_ica: String(pesosDeTexto(document.getElementById('editReteIca').value)),
     };
     if (!tieneItems) {
-      payloadHeader.valor_sin_iva = document.getElementById('editSubtotal').value;
+      payloadHeader.valor_sin_iva = String(pesosDeTexto(document.getElementById('editSubtotal').value));
       payloadHeader.categoria_concepto = document.getElementById('editCategoria').value;
       payloadHeader.subcuenta_gasto = document.getElementById('editSubcuenta').value;
     }
@@ -1012,6 +1104,7 @@ async function guardarFactura(invoiceId, btn){
     if (idx !== -1) allInvoices[idx] = { ...allInvoices[idx], ...data };
     editandoFactura = false;
     itemsEnEdicion = null;
+    cabeceraEnEdicion = null;
     Aviso.mostrar('Factura actualizada -- el asiento contable se recalculó.');
     renderDetalle();
     cargarAsientoDeFactura(invoiceId); // también refresca itemsActuales con lo que quedó guardado
@@ -1029,6 +1122,26 @@ async function guardarFactura(invoiceId, btn){
 // igual pero el asiento se queda "Propuesto" hasta que el contador lo
 // corrija desde "Editar asiento" -- ahí mismo se aprueba solo apenas
 // cuadre, sin un botón "Aprobar asiento" aparte que recordar pulsar.
+async function marcarLetrasRevisado(invoiceId, btn){
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/invoices/${invoiceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ letras_revisado: true }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+    const idx = allInvoices.findIndex((i) => i.id === invoiceId);
+    if (idx !== -1) allInvoices[idx] = { ...allInvoices[idx], ...data };
+    renderDetalle();
+    Aviso.mostrar('Listo -- el aviso del valor en letras no se vuelve a mostrar para esta factura.');
+  } catch (err) {
+    btn.disabled = false;
+    Aviso.mostrar('No se pudo marcar como revisado: ' + err.message, { tipo: 'error' });
+  }
+}
+
 async function guardarMesContable(invoiceId, mes){
   try {
     const res = await fetch(`/api/invoices/${invoiceId}`, {
@@ -1126,6 +1239,13 @@ document.getElementById('colaLista').addEventListener('click', (e) => {
   if (!item || item.dataset.id === seleccionadaId) return;
   seleccionadaId = item.dataset.id;
   renderDetalle(); // carga el asiento de la nueva selección
+});
+
+// Un solo listener (el contenedor del detalle no se vuelve a crear): el
+// total del formulario de edición sigue a los ítems y al IVA.
+document.getElementById('detalleContenido').addEventListener('input', (e) => {
+  const t = e.target;
+  if (t && (['editIva', 'editSubtotal', 'editReteFuente', 'editReteIva', 'editReteIca'].includes(t.id) || t.classList.contains('ef-item-subtotal'))) actualizarTotalEdicion();
 });
 
 let filtroTimeout = null;

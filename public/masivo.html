@@ -90,6 +90,11 @@
   .fc-proveedor{ font-size:var(--t-12); color:var(--ink-soft); margin-top:2px; }
   .fc-top-derecha{ display:flex; align-items:center; gap:10px; flex:0 0 auto; margin-left:auto; }
   .fc-valor{ font-family:var(--font-num); font-size:var(--t-14); font-weight:600; color:var(--ink); white-space:nowrap; }
+  /* Valor a pagar (total con IVA − retenciones − abonos) y, debajo, de
+     dónde sale -- antes la tarjeta mostraba solo el subtotal sin IVA. */
+  .fc-valor{ display:flex; flex-direction:column; align-items:flex-end; line-height:1.2; }
+  .fc-valor-etiqueta{ font-family:var(--font-ui); font-size:11px; font-weight:600; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; }
+  .fc-valor-detalle{ font-size:11px; font-weight:400; color:var(--ink-faint); }
   .fc-mensaje{ font-size:var(--t-13); color:var(--ink-soft); margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
   .fc-mensaje-error{ color:var(--err); }
   .fc-acciones{ margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; }
@@ -1022,7 +1027,7 @@ function renderFichaCompletaSinPosicion(item, modoEdicion){
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
       ${filaAvisos}
-      <div class="fd-table">${filasCampos}<div class="fd-row"><div class="fd-label">Mes contable</div><div class="fd-value" id="masivoMesContable"></div></div>${filaAvisoNit}${filaCategoria}${filaRetencion}${filaReteIva}</div>
+      <div class="fd-table">${filasCampos}<div class="fd-row"><div class="fd-label">Valor a pagar</div><div class="fd-value money"><b id="masivoNetoAPagar"></b></div></div><div class="fd-row"><div class="fd-label">Mes contable</div><div class="fd-value" id="masivoMesContable"></div></div>${filaAvisoNit}${filaCategoria}${filaRetencion}${filaReteIva}</div>
       <div id="itemsMiniPanel"></div>
     </div>
     <div style="font-size:var(--t-12);color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
@@ -1381,6 +1386,8 @@ function actualizarEstimadosRetencionMasivo(){
     renderItemsMiniPanel(itemAbierto); // la columna de ítems sigue a la Rete Fuente de la ficha
   }
   agregarAvisoUvtRespaldoSiAplica(estFuenteEl, d.fecha_factura);
+  const netoEl = document.getElementById('masivoNetoAPagar');
+  if (netoEl) netoEl.textContent = textoNetoAPagar(d);
 
   estIvaEl.classList.remove('show');
   estIvaEl.innerHTML = '';
@@ -1563,6 +1570,8 @@ document.getElementById('modalDatos').addEventListener('input', (e) => {
     guardarEdicionItem(itemAbierto);
     if (key === 'nit_cc') actualizarAvisoSinNitMasivo();
     if (key === 'valor_abonado' || key === 'valor_con_iva') actualizarSaldoPendienteMasivo();
+    const netoEl = document.getElementById('masivoNetoAPagar');
+    if (netoEl) netoEl.textContent = textoNetoAPagar(itemAbierto.data);
   }
 });
 document.getElementById('modalDatos').addEventListener('click', (e) => {
@@ -2099,7 +2108,7 @@ function renderSummary(){
             </div>
           </div>
           <div class="fc-top-derecha">
-            <span class="fc-valor">$${(Number(dg.valor_sin_iva) || 0).toLocaleString('es-CO')}</span>
+            ${valorAPagarTarjetaHtml(dg)}
             <span class="status-badge guardada">✓ Guardada</span>
           </div>
         </div>
@@ -2224,7 +2233,7 @@ function renderSummary(){
           </div>
         </div>
         <div class="fc-top-derecha">
-          <span class="fc-valor">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</span>
+          ${valorAPagarTarjetaHtml(d)}
           ${estadoBadge}
           <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
         </div>
@@ -2827,6 +2836,19 @@ function montarQrCelular(){
   cont.appendChild(btnActual);
   cont.appendChild(btn);
 })();
+
+// Valor a pagar en la tarjeta del lote: lo que se le gira al proveedor
+// (total con IVA − retenciones − abonos), con el detalle debajo.
+function valorAPagarTarjetaHtml(d){
+  const r = netoAPagar(d);
+  const p = (v) => '$' + Math.round(v).toLocaleString('es-CO');
+  const detalle = [`total ${p(r.total)}`];
+  if (r.retenciones) detalle.push(`− ret. ${p(r.retenciones)}`);
+  if (r.abonado) detalle.push(`− abono ${p(r.abonado)}`);
+  return `<span class="fc-valor" title="Subtotal ${p(Number(d.valor_sin_iva) || 0)} + IVA ${p(Number(d.valor_iva) || 0)} = total ${p(r.total)}${r.retenciones ? ' − retenciones ' + p(r.retenciones) : ''}${r.abonado ? ' − abonado ' + p(r.abonado) : ''}">`
+    + `<span class="fc-valor-etiqueta">A pagar</span>${p(r.neto)}`
+    + `<span class="fc-valor-detalle">${detalle.join(' ')}</span></span>`;
+}
 
 async function requireAuthAndInit(){
   try {

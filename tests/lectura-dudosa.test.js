@@ -89,3 +89,38 @@ test('Retención por ítem en aseo/vigilancia: sobre el AIU de la línea, no sob
   assert.equal(R.montoRetencionItem({ categoria_concepto: 'vigilancia_aseo', subtotal: 290906, aiu: '290906' }, 0.02), 5818);
   assert.equal(R.montoRetencionItem({ categoria_concepto: 'vigilancia_aseo', subtotal: 2909057, aiu: '' }, 0.02), null); // falta AIU
 });
+
+test('Valor a pagar: total con IVA − retenciones − abonado', () => {
+  assert.deepEqual(R.netoAPagar({ valor_con_iva: 762904, rete_fuente: 25640 }), { total: 762904, retenciones: 25640, abonado: 0, neto: 737264 });
+  assert.equal(R.netoAPagar({ valor_con_iva: 1000, rete_fuente: 40, rete_iva: 20, rete_ica: 5, valor_abonado: 100 }).neto, 835);
+  assert.equal(R.textoNetoAPagar({ valor_con_iva: 762904, rete_fuente: 25640 }), '$737.264 (total $762.904 − retenciones $25.640)');
+});
+
+// ---------- Avisos que quedaban "pegados" después de corregir (Aplicamos.CO, oct. 2026) ----------
+const { listaExcepciones } = require('../public/excepciones');
+const aplicamos = (extra) => ({
+  valor_sin_iva: 641000, valor_iva: 121904, valor_con_iva: 762904, rete_fuente: 25640,
+  valor_letras_texto: 'SETECIENTOS TREINTA Y SIETE MIL OCHOCIENTOS CUARENTA PESOS CON 00/100', valor_letras_numero: 737840,
+  valores_descuadrados: true, // la marca vieja guardada al crear la factura
+  ...extra,
+});
+
+test('"Valores no cuadran" se calcula con los valores actuales, no con la marca vieja', () => {
+  assert.equal(tieneExcepcion(aplicamos(), 'descuadre'), false); // 641.000 + 121.904 = 762.904
+  assert.equal(tieneExcepcion(aplicamos({ valor_con_iva: 800000 }), 'descuadre'), true);
+});
+
+test('Letras = valor a pagar (total − retenciones): no es un error', () => {
+  assert.equal(tieneExcepcion(aplicamos({ rete_fuente: 25064 }), 'letras_no_coincide'), false); // 762.904 − 25.064 = 737.840
+  assert.equal(tieneExcepcion(aplicamos({ valor_letras_numero: 762904 }), 'letras_no_coincide'), false); // el total
+});
+
+test('Letras ≠ total ni neto: explica la diferencia y señala la retención (25.640 vs 25.064)', () => {
+  const e = listaExcepciones(aplicamos()).find((x) => x.tipo === 'letras_no_coincide');
+  assert.ok(e);
+  assert.match(e.detalle, /equivalen al total menos \$25\.064.*retención de \$25\.064.*registrada es \$25\.640/);
+});
+
+test('Letras revisadas por el contador: el aviso no vuelve a salir', () => {
+  assert.equal(tieneExcepcion(aplicamos({ letras_revisado: true }), 'letras_no_coincide'), false);
+});

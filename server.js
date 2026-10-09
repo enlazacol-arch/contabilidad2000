@@ -178,6 +178,9 @@ async function ensureSchema() {
   // ser distinto del mes de emisión (fecha_factura). Ver el relleno de
   // las ya aprobadas más abajo, después de aprobado_por_contador.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS mes_contable TEXT DEFAULT '';`);
+  // El contador revisó que el valor en letras no coincide con el documento
+  // y lo dejó así (ej. error de imprenta del proveedor): no se vuelve a avisar.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS letras_revisado BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica_municipio TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gran_contribuyente BOOLEAN DEFAULT false;`);
@@ -2969,7 +2972,7 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 // el documento de otro proveedor por completo), la salida sigue siendo
 // borrar la factura y volver a escanearla/digitarla.
 const CAMPOS_EDITABLES_FACTURA = [
-  'dv', 'fecha_factura', 'concepto', 'mes_contable',
+  'dv', 'fecha_factura', 'concepto', 'mes_contable', 'letras_revisado',
   'categoria_concepto', 'subcuenta_gasto',
   'rete_fuente', 'rete_iva', 'rete_ica', 'valor_iva',
 ];
@@ -3019,6 +3022,7 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
     sets.push(`valor_con_iva = $${i}`);
     values.push(String(subtotalFinal + ivaFinal));
     i++;
+    sets.push('valores_descuadrados = false'); // total = subtotal + IVA: ya cuadra
 
     values.push(req.params.id, req.firmaId);
     const { rows } = await pool.query(
@@ -3244,7 +3248,7 @@ app.put('/api/invoices/:id/items', requireAuth, async (req, res) => {
 
     const nuevoSubtotal = itemsConIva.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
     const { rows } = await pool.query(
-      `UPDATE invoices SET valor_sin_iva = $1, valor_con_iva = $2 WHERE id = $3 AND contador_id = $4 RETURNING *`,
+      `UPDATE invoices SET valor_sin_iva = $1, valor_con_iva = $2, valores_descuadrados = false WHERE id = $3 AND contador_id = $4 RETURNING *`,
       [String(nuevoSubtotal), String(nuevoSubtotal + ivaCabecera), req.params.id, req.firmaId]
     );
 
@@ -4246,6 +4250,12 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     } catch (err) {
       console.error('No se pudo buscar el NIT del proveedor en el historial:', err.message);
     }
+  }
+  // NIT de empresa sin DV en el documento (pasó con Comcel 800153993): el
+  // DV se calcula con la fórmula de la DIAN, no hay nada que adivinar.
+  if (parsed.nit_cc && !String(parsed.dv == null ? '' : parsed.dv).trim() && (String(parsed.tipo_doc) === '31' || /^[89]\d{8}$/.test(String(parsed.nit_cc)))) {
+    const dvCalculado = calcularDvNit(parsed.nit_cc);
+    if (dvCalculado) { parsed.dv = dvCalculado; parsed.dv_calculado = true; }
   }
   if (parsed.nit_cc && parsed.dv !== undefined && parsed.dv !== null && String(parsed.dv).trim() !== '') {
     const dvCalculado = calcularDvNit(parsed.nit_cc);
