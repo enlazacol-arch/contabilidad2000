@@ -871,7 +871,26 @@ html:has(.file-modal.show, .modal-doc.show, .modal-plantilla.show, .modal-valida
 .leyenda-obligatorios{ font-size:var(--t-12, 12px); color:var(--text-3, #566D79); margin:0 0 var(--s-3, 12px); }
 .leyenda-obligatorios .requerido{ margin:0 2px 0 0; }
 
-/* Atajo del mes contable elegido ("Mes de emisión" / "Mes actual"), ver mes-contable.js */
-.mes-contable .btn.mes-atajo.activo,
-.mes-contable .btn.mes-atajo.activo:hover{ background:var(--pet-600, #0B4F6C); border-color:var(--pet-600, #0B4F6C); color:#fff; }
-.mes-contable .btn.mes-atajo.activo::before{ content:'✓ '; }
+/* ---------- Mes contable (ver /mes-contable.js) ----------
+   Fichas de mes para elegir de un clic: de la emisión al mes actual,
+   con "emisión"/"actual" marcados, y "Otro mes…". La elegida, en petróleo. */
+.mes-contable{ display:flex; flex-direction:column; gap:8px; }
+.mes-contable-opciones{ display:flex; flex-wrap:wrap; gap:6px; }
+.mes-atajo{
+  display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
+  min-width:78px; min-height:44px; padding:6px 12px; line-height:1.15;
+  border:1px solid var(--border-strong, #C3D3DB); border-radius:var(--r-md, 10px);
+  background:var(--surface, #fff); color:var(--text, #1D2A32);
+  font-family:var(--font-ui); cursor:pointer;
+  transition:background var(--dur-1, .12s) var(--ease, ease), border-color var(--dur-1, .12s) var(--ease, ease);
+  -webkit-tap-highlight-color:transparent; touch-action:manipulation;
+}
+.mes-atajo-nombre{ font-weight:700; font-size:var(--t-13, 13px); text-transform:capitalize; }
+.mes-atajo-etiqueta{ font-size:11px; color:var(--text-3, #566D79); margin-top:1px; }
+.mes-atajo-otro .mes-atajo-nombre{ font-weight:600; color:var(--pet-600, #0B4F6C); text-transform:none; }
+@media (hover:hover){ .mes-atajo:hover{ border-color:var(--pet-600, #0B4F6C); background:var(--pet-50, #F1F7FA); } }
+.mes-atajo.activo, .mes-atajo.activo:hover{ background:var(--pet-600, #0B4F6C); border-color:var(--pet-600, #0B4F6C); color:#fff; }
+.mes-atajo.activo .mes-atajo-etiqueta, .mes-atajo.activo .mes-atajo-nombre{ color:#fff; }
+.mes-atajo:focus-visible{ outline:2px solid var(--pet-600, #0B4F6C); outline-offset:2px; }
+.mes-contable-input{ max-width:200px; }
+.mes-contable-input[hidden]{ display:none; }

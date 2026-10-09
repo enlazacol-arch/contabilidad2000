@@ -4247,6 +4247,12 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
       console.error('No se pudo buscar el NIT del proveedor en el historial:', err.message);
     }
   }
+  // NIT de empresa sin DV en el documento (pasó con Comcel 800153993): el
+  // DV se calcula con la fórmula de la DIAN, no hay nada que adivinar.
+  if (parsed.nit_cc && !String(parsed.dv == null ? '' : parsed.dv).trim() && (String(parsed.tipo_doc) === '31' || /^[89]\d{8}$/.test(String(parsed.nit_cc)))) {
+    const dvCalculado = calcularDvNit(parsed.nit_cc);
+    if (dvCalculado) { parsed.dv = dvCalculado; parsed.dv_calculado = true; }
+  }
   if (parsed.nit_cc && parsed.dv !== undefined && parsed.dv !== null && String(parsed.dv).trim() !== '') {
     const dvCalculado = calcularDvNit(parsed.nit_cc);
     if (dvCalculado && dvCalculado !== String(parsed.dv).trim()) {

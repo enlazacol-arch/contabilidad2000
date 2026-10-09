@@ -1361,6 +1361,26 @@ function tarifaFuenteOpciones(categoria){
 // el IVA de cada línea prorrateado a partir del IVA total de la factura
 // según la participación de cada ítem en el subtotal. Mismo cálculo en
 // Escanear y en Carga masiva -- de ahí que viva aquí y no en cada página.
+// ---------- Valor a pagar al proveedor ----------
+// Lo que de verdad se le gira: el total con IVA menos las retenciones que
+// practica el cliente (Rete Fuente, ReteIVA, ReteICA) y menos lo que ya
+// se le abonó/anticipó. Es informativo -- el gasto se causa por el total.
+function netoAPagar(inv) {
+  const n = (v) => Number(v) || 0;
+  const total = n(inv && inv.valor_con_iva);
+  const retenciones = n(inv && inv.rete_fuente) + n(inv && inv.rete_iva) + n(inv && inv.rete_ica);
+  const abonado = n(inv && inv.valor_abonado);
+  return { total, retenciones, abonado, neto: total - retenciones - abonado };
+}
+function textoNetoAPagar(inv) {
+  const r = netoAPagar(inv);
+  const p = (v) => '$' + Math.round(v).toLocaleString('es-CO');
+  const partes = [`total ${p(r.total)}`];
+  if (r.retenciones) partes.push(`− retenciones ${p(r.retenciones)}`);
+  if (r.abonado) partes.push(`− abonado ${p(r.abonado)}`);
+  return `${p(r.neto)} (${partes.join(' ')})`;
+}
+
 // ---------- Retención "según tarifas por ítem" (columna informativa) ----------
 // La Rete Fuente de la FICHA manda: si quedó en $0 (no aplica, o el
 // contador eligió "Ninguno"), cada línea también va en $0 -- antes cada
@@ -2043,6 +2063,8 @@ if (typeof module !== 'undefined' && module.exports) {
     tarifaFuenteOpciones,
     tarifaRetencionItem,
     montoRetencionItem,
+    netoAPagar,
+    textoNetoAPagar,
     itemsParaGuardar,
     desgloseDesdeItems,
     desgloseAiuDesdeItems,

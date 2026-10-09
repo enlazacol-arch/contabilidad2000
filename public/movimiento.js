@@ -280,6 +280,18 @@ function clasificarMovimiento(factura, clientes, opciones) {
       const contradice = nitDelClienteEnOtroLado(clienteFijo, 'emisor');
       return resultado('ingreso', clienteFijo, !contradice, 'emisor', '', true);
     }
+    // Cliente fijo (la factura se subió desde SU ficha) y el comprador no
+    // trae NIT (o trae uno con un error de lectura), con un nombre que
+    // puede ser el suyo aunque venga recortado ("CONJUNTO RESIDENCIAL
+    // URBANIZACION BOSQUE" por "...BOSQUES DE LA MACARENA P.H", caso
+    // Comcel oct. 2026): como ya se sabe de quién es, basta con que el
+    // nombre sea compatible -- siempre que el emisor no sea el mismo cliente.
+    if (String(datos.adquiriente_nombre || '').trim() && nombresCompatibles(datos.adquiriente_nombre, clienteFijo.nombre) &&
+        ['vacio', 'parecido'].includes(comparacionNit(datos.adquiriente_nit, clienteFijo.nit)) &&
+        !(String(datos.nombre_razon_social || '').trim() && nombresCompatibles(datos.nombre_razon_social, clienteFijo.nombre))) {
+      const contradice = nitDelClienteEnOtroLado(clienteFijo, 'adquiriente');
+      return resultado('egreso', clienteFijo, !contradice && avisos.length === 0, 'adquiriente', '', true);
+    }
     if (nitsCoinciden(datos.nit_cc, clienteFijo.nit) && !mismoNit) avisarNombre(clienteFijo, 'emisor', datos.nombre_razon_social);
     if (nitsCoinciden(datos.adquiriente_nit, clienteFijo.nit)) avisarNombre(clienteFijo, 'comprador', datos.adquiriente_nombre);
     return resultado('egreso', clienteFijo, false, avisos.length ? 'nombre_no_coincide' : 'cliente_fijo_sin_coincidencia');

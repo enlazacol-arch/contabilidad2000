@@ -301,3 +301,23 @@ test('Nombre con varias palabras mal escritas y sin NIT (EDIFISIO FARO ALEJANDRA
   assert.equal(f.adquiriente_nit, '811026272');
   assert.equal(f.adquiriente_nombre, faro.nombre);
 });
+
+test('Cliente fijo con nombre recortado y sin NIT (Comcel -> "...URBANIZACION BOSQUE"): es el comprador, se completa', () => {
+  const bosques = { id: 'PH', nombre: 'CONJUNTO RESIDENCIAL URBANIZACION BOSQUES DE LA MACARENA P.H', nit: '900579294' };
+  const f = { nit_cc: '800153993', nombre_razon_social: 'COMCEL S.A.', adquiriente_nit: '', adquiriente_nombre: 'CONJUNTO RESIDENCIAL URBANIZACION BOSQUE' };
+  const r = clasificarMovimiento(f, [bosques], { clienteFijo: bosques });
+  assert.equal(r.tipoMovimiento, 'egreso');
+  assert.equal(r.motivo, 'adquiriente');
+  M.aplicarCorreccionesCliente(f, r);
+  assert.equal(f.adquiriente_nit, '900579294');
+  // Sin cliente fijo, el nombre recortado NO alcanza (no se adivina entre todos los clientes)
+  const g = { ...f, adquiriente_nit: '', adquiriente_nombre: 'CONJUNTO RESIDENCIAL URBANIZACION BOSQUE' };
+  assert.equal(clasificarMovimiento(g, [bosques]).clienteId, '');
+});
+
+test('Cliente fijo: si el EMISOR también se parece al cliente, no se asume que es el comprador', () => {
+  const faroFijo = { id: 'F', nombre: 'EDIFICIO FARO DE ALEJANDRIA P.H', nit: '811026272' };
+  const f = { nit_cc: '', nombre_razon_social: 'FARO ALEJANDRIA', adquiriente_nit: '', adquiriente_nombre: 'FARO' };
+  const r = clasificarMovimiento(f, [faroFijo], { clienteFijo: faroFijo });
+  assert.notEqual(r.motivo, 'adquiriente');
+});

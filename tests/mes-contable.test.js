@@ -43,3 +43,11 @@ test('nombreMesContable y mesActual', () => {
   assert.equal(M.nombreMesContable('x'), '');
   assert.equal(M.mesActual(new Date(2026, 9, 9)), '2026-10');
 });
+
+test('mesesSugeridos: de la emisión al mes actual (máximo 4 botones)', () => {
+  assert.deepEqual(M.mesesSugeridos('2026-08', '2026-10'), ['2026-08', '2026-09', '2026-10']);
+  assert.deepEqual(M.mesesSugeridos('2026-01', '2026-10'), ['2026-01', '2026-08', '2026-09', '2026-10']);
+  assert.deepEqual(M.mesesSugeridos('2026-10', '2026-10'), ['2026-10']);
+  assert.deepEqual(M.mesesSugeridos('2026-12', '2026-10'), ['2026-10', '2026-12']); // fecha futura (mal leída)
+  assert.deepEqual(M.mesesSugeridos('', '2026-10'), ['2026-10']);
+});

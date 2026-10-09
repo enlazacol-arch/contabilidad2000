@@ -1345,7 +1345,7 @@ function restaurarEdicionFormulario(ed, data){
     const el = ledger.querySelector(`[data-key="${CSS.escape(key)}"]`);
     if (!el || el.value === valor) return;
     el.value = valor;
-    el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+    el.dispatchEvent(new Event(el.tagName === 'SELECT' || el.type === 'month' ? 'change' : 'input', { bubbles: true }));
   });
 
   if (ed.clienteId && (ed.clienteId !== currentClienteId || ed.tipoMovimiento !== currentTipoMovimiento)) {
@@ -2289,6 +2289,15 @@ function renderResult(data){
 
     ledger.appendChild(row);
 
+    // Después de las retenciones: lo que de verdad se le paga al proveedor.
+    if (f.key === 'rete_ica') {
+      const netoRow = document.createElement('div');
+      netoRow.className = 'field-row';
+      netoRow.innerHTML = '<div class="field-label">Valor a pagar</div><div class="field-value money"><b id="netoAPagarEscanear"></b></div>';
+      ledger.appendChild(netoRow);
+      setTimeout(actualizarNetoAPagarEscanear, 0);
+    }
+
     // Debajo de la fecha de emisión: el MES CONTABLE en que se causa (lo
     // decide el contador -- no se llena solo; se exige al aprobar en
     // Revisión). Lleva data-key, así se conserva al ir y volver entre
@@ -2789,6 +2798,7 @@ function actualizarEstimadosRetencion(){
   }
 
   if (currentItems.length > 0 && parseMoneyValue(fuenteInput.value) !== reteFuenteItemsPintada) renderItemsPanel();
+  actualizarNetoAPagarEscanear(); // el menú de Rete Fuente pudo cambiar el valor sin evento
 
   const ivaPorque = document.createElement('div');
   ivaPorque.className = 'fine';
@@ -3293,6 +3303,17 @@ function onItemsChanged(){
   }
   actualizarEstimadosRetencion();
 }
+
+// "Valor a pagar" = total con IVA − retenciones − abonado, en vivo.
+function actualizarNetoAPagarEscanear(){
+  const el = document.getElementById('netoAPagarEscanear');
+  if (!el) return;
+  const v = (k) => { const i = ledger.querySelector(`input[data-key="${k}"]`); return i ? parseMoneyValue(i.value) : 0; };
+  el.textContent = textoNetoAPagar({ valor_con_iva: v('valor_con_iva'), rete_fuente: v('rete_fuente'), rete_iva: v('rete_iva'), rete_ica: v('rete_ica'), valor_abonado: v('valor_abonado') });
+}
+ledger.addEventListener('input', (e) => {
+  if (e.target && ['valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica', 'valor_abonado', 'valor_sin_iva', 'valor_iva'].includes(e.target.dataset.key)) actualizarNetoAPagarEscanear();
+});
 
 // Rete Fuente con la que se pintó la columna de ítems -- si la de la
 // ficha cambia (el contador la edita o el menú aplica la recomendada),

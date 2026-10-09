@@ -59,55 +59,93 @@ function fechaAsientoContable(inv) {
 }
 
 // ---------- Selector en pantalla (navegador) ----------
-// <input type="month"> + dos atajos: "Mes de emisión" y "Mes actual".
-// Nunca elige solo: arranca con `valor` (vacío si nadie lo ha elegido).
+// Una fila de meses para elegir de un clic: desde el mes de emisión hasta
+// el mes actual (una factura se causa en ese rango casi siempre), con
+// "emisión" y "actual" marcados, y "Otro mes…" para cualquier otro. El
+// elegido queda resaltado. Nunca elige solo: arranca con `valor` (vacío
+// si nadie lo ha elegido).
 //   renderSelectorMesContable(contenedor, { valor, fechaFactura, obligatorio, alCambiar })
+// Devuelve el <input type="month"> (lleva el valor; oculto hasta "Otro mes…").
+
+// Meses que se ofrecen como botón: de la emisión al actual; si son más de
+// 4, la emisión y los 3 últimos. Si la emisión es posterior al mes actual
+// (fecha mal leída), solo esos dos.
+function mesesSugeridos(mesEmision, actual) {
+  const sumar = (mes, n) => {
+    const [y, m] = mes.split('-').map(Number);
+    const d = new Date(y, m - 1 + n, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  if (!mesContableValido(mesEmision) || mesEmision > actual) {
+    return [mesEmision, actual].filter((m, i, a) => mesContableValido(m) && a.indexOf(m) === i).sort();
+  }
+  const rango = [];
+  for (let m = mesEmision; m <= actual && rango.length < 25; m = sumar(m, 1)) rango.push(m);
+  return rango.length <= 4 ? rango : [rango[0], ...rango.slice(-3)];
+}
+
 function renderSelectorMesContable(contenedor, opciones) {
   if (!contenedor) return null;
   const op = opciones || {};
   const wrap = document.createElement('div');
   wrap.className = 'mes-contable';
-  wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
 
-  const fila = document.createElement('div');
-  fila.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;';
   const input = document.createElement('input');
   input.type = 'month';
   input.className = 'input mes-contable-input';
   input.value = mesContableValido(op.valor) ? op.valor : '';
   input.setAttribute('aria-label', 'Mes contable');
   if (op.obligatorio) input.setAttribute('aria-required', 'true');
-  input.style.cssText = 'max-width:180px;';
-  fila.appendChild(input);
+
+  const fila = document.createElement('div');
+  fila.className = 'mes-contable-opciones';
+  fila.setAttribute('role', 'group');
+  fila.setAttribute('aria-label', 'Mes contable');
 
   const ayuda = document.createElement('div');
-  ayuda.className = 'fine';
+  ayuda.className = 'fine mes-contable-ayuda';
+
+  const mesEmision = mesDeFecha(op.fechaFactura);
+  const actual = mesActual();
+  const sugeridos = mesesSugeridos(mesEmision, actual);
 
   const fijar = (mes) => {
     input.value = mes;
     actualizar();
     if (typeof op.alCambiar === 'function') op.alCambiar(mes);
   };
-  const atajo = (texto, mes) => {
-    if (!mesContableValido(mes)) return;
+  sugeridos.forEach((mes) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn ghost btn--sm mes-atajo';
+    b.className = 'mes-atajo';
     b.dataset.mes = mes;
     b.setAttribute('aria-pressed', 'false');
-    b.textContent = `${texto} (${nombreMesContable(mes)})`;
+    const [y, m] = mes.split('-');
+    const etiqueta = mes === mesEmision ? 'emisión' : (mes === actual ? 'actual' : '');
+    b.innerHTML = `<span class="mes-atajo-nombre">${MESES_NOMBRE[Number(m) - 1].slice(0, 3)} ${y}</span>${etiqueta ? `<span class="mes-atajo-etiqueta">${etiqueta}</span>` : ''}`;
+    b.title = `${nombreMesContable(mes)}${etiqueta ? ' (mes de ' + etiqueta + ')' : ''}`;
     b.addEventListener('click', () => fijar(mes));
     fila.appendChild(b);
-  };
-  const mesEmision = mesDeFecha(op.fechaFactura);
-  atajo('Mes de emisión', mesEmision);
-  if (mesActual() !== mesEmision) atajo('Mes actual', mesActual());
+  });
+  const otro = document.createElement('button');
+  otro.type = 'button';
+  otro.className = 'mes-atajo mes-atajo-otro';
+  otro.innerHTML = '<span class="mes-atajo-nombre">Otro mes…</span>';
+  otro.addEventListener('click', () => {
+    input.hidden = false;
+    input.focus();
+    if (typeof input.showPicker === 'function') { try { input.showPicker(); } catch (e) { /* algunos navegadores no lo permiten */ } }
+  });
+  fila.appendChild(otro);
+  // El selector de mes del navegador solo se muestra si hace falta: con
+  // "Otro mes…" o si el mes elegido no está entre los botones.
+  input.hidden = !(input.value && !sugeridos.includes(input.value));
 
   function actualizar() {
     const mes = input.value;
-    // El atajo del mes elegido queda resaltado.
+    const enBotones = sugeridos.includes(mes);
     fila.querySelectorAll('.mes-atajo').forEach((b) => {
-      const activo = b.dataset.mes === mes;
+      const activo = b.dataset.mes ? b.dataset.mes === mes : (!!mes && !enBotones);
       b.classList.toggle('activo', activo);
       b.setAttribute('aria-pressed', activo ? 'true' : 'false');
     });
@@ -130,6 +168,7 @@ function renderSelectorMesContable(contenedor, opciones) {
   });
 
   wrap.appendChild(fila);
+  wrap.appendChild(input);
   wrap.appendChild(ayuda);
   contenedor.appendChild(wrap);
   actualizar();
@@ -137,5 +176,5 @@ function renderSelectorMesContable(contenedor, opciones) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { mesContableValido, mesDeFecha, mesContableDeFactura, mesActual, nombreMesContable, fechaAsientoContable };
+  module.exports = { mesContableValido, mesDeFecha, mesContableDeFactura, mesActual, nombreMesContable, fechaAsientoContable, mesesSugeridos };
 }
