@@ -944,6 +944,12 @@ function renderFichaCompleta(item, modoEdicion){
   // se avisa ANTES de seguir con cualquier cálculo si el valor escrito en
   // palabras no coincide con el escrito en cifras (error de digitación
   // o de imprenta frecuente en documentos físicos).
+  if (d.aviso_valores) {
+    avisosDoc.push(`⚠ <b>Subtotal corregido:</b> ${escapeHtml(d.aviso_valores)}`);
+  }
+  if (d.aviso_segmentacion) {
+    avisosDoc.push(`⚠ <b>Factura reunida:</b> ${escapeHtml(d.aviso_segmentacion)}`);
+  }
   const valorLetrasNumeroFicha = Number(d.valor_letras_numero) || 0;
   const valorConIvaFicha = Number(d.valor_con_iva) || 0;
   if (tieneExcepcion(d, 'letras_no_coincide')) {
@@ -1108,6 +1114,9 @@ function renderItemsMiniPanel(item){
     // solo el aviso de "no coinciden" más abajo.
     if (d.items.length > 0) {
       d.valor_sin_iva = String(d.items.reduce((s, it) => s + (Number(it.subtotal) || 0), 0));
+      // El total también (subtotal + IVA, misma regla que el servidor al
+      // editar una factura) -- antes quedaba el total viejo y no cuadraba.
+      d.valor_con_iva = String((Number(d.valor_sin_iva) || 0) + (Number(d.valor_iva) || 0));
     }
     guardarEdicionItem(item);
     renderFichaCompleta(item); // re-renderiza todo el modal -- así el estimado de retención de arriba también se refresca
