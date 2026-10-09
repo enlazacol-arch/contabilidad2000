@@ -1475,7 +1475,7 @@ app.patch('/api/firma', requireAuth, requireRole('administrador'), async (req, r
 // incluido" más adelante.
 const PLAN_LIMITS = {
   solo: 5,
-  profesional: 10,
+  profesional: 50, // "Firma pequeña" en la página de precios (antes 10)
 };
 
 function clientLimitFor(plan) {
