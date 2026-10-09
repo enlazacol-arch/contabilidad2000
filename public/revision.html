@@ -262,6 +262,7 @@
 <script src="/retenciones.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
+<script src="/mes-contable.js"></script>
 <script>
 'use strict';
 
@@ -823,6 +824,10 @@ function renderDetalle(){
         ${puedeAdministrar(miRol) ? '<button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>' : ''}
       </div>
     </div>
+    <div class="det-seccion">
+      <h3>Mes contable <span class="requerido" aria-hidden="true">*</span></h3>
+      <div id="detMesContable"></div>
+    </div>
     ${renderExcepcionesSeccion(inv)}
     <div class="det-seccion ${inv.archivo_original ? 'det-con-original' : ''}">
       ${renderDocumentoOriginalPanel(inv)}
@@ -835,6 +840,16 @@ function renderDetalle(){
     ${renderAsientoSeccion(inv)}
     ${renderTarifaSeccion(inv)}
   `;
+
+  // Mes contable: obligatorio para aprobar. Se guarda apenas se elige
+  // (sin esperar a "Guardar"), para que no se pierda si se cambia de factura.
+  const mesInput = renderSelectorMesContable(document.getElementById('detMesContable'), {
+    valor: inv.mes_contable || '',
+    fechaFactura: inv.fecha_factura,
+    obligatorio: true,
+    alCambiar: (mes) => guardarMesContable(inv.id, mes),
+  });
+  if (mesInput && !puedeAdministrar(miRol)) mesInput.disabled = true;
 
   const btnEditarAsiento = document.getElementById('btnEditarAsiento');
   if (btnEditarAsiento) btnEditarAsiento.addEventListener('click', () => {
@@ -1014,12 +1029,39 @@ async function guardarFactura(invoiceId, btn){
 // igual pero el asiento se queda "Propuesto" hasta que el contador lo
 // corrija desde "Editar asiento" -- ahí mismo se aprueba solo apenas
 // cuadre, sin un botón "Aprobar asiento" aparte que recordar pulsar.
+async function guardarMesContable(invoiceId, mes){
+  try {
+    const res = await fetch(`/api/invoices/${invoiceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mes_contable: mes }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar el mes contable.');
+    const inv = allInvoices.find((i) => i.id === invoiceId);
+    if (inv) inv.mes_contable = data.mes_contable;
+  } catch (err) {
+    Aviso.mostrar('No se pudo guardar el mes contable: ' + err.message, { tipo: 'error' });
+  }
+}
+
 async function aprobarFactura(id, btn){
+  const pendiente = allInvoices.find((i) => i.id === id);
+  if (pendiente && !mesContableValido(pendiente.mes_contable)) {
+    Aviso.mostrar('Elige el mes contable en que se causa esta factura antes de aprobarla.', { tipo: 'error' });
+    const input = document.querySelector('#detMesContable input');
+    if (input) { input.focus(); input.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    return;
+  }
   btn.disabled = true;
   const original = btn.textContent;
   btn.textContent = 'Aprobando…';
   try {
-    const res = await fetch(`/api/invoices/${id}/aprobar`, { method: 'POST' });
+    const res = await fetch(`/api/invoices/${id}/aprobar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mes_contable: pendiente ? pendiente.mes_contable : '' }),
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'No se pudo aprobar la factura.');
     const inv = allInvoices.find((i) => i.id === id);

@@ -22,9 +22,11 @@ function etiquetaMes(yyyyMm){
   return MESES_CORTOS[Number(m) - 1] + ' ' + y.slice(2);
 }
 
-// Extrae "YYYY-MM" de una factura (el campo fecha_factura viene como
-// texto "DD/MM/AAAA"). Devuelve null si la fecha no es válida.
+// "YYYY-MM" del MES CONTABLE de una factura (en qué mes se causó, ver
+// /mes-contable.js); si no tiene, el de su fecha de emisión ("DD/MM/AAAA").
+// Devuelve null si no hay ninguno válido.
 function mesDeFactura(inv){
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(String(inv.mes_contable || ''))) return inv.mes_contable;
   const [d, m, y] = (inv.fecha_factura || '').split('/');
   if (!d || !m || !y) return null;
   return `${y}-${m.padStart(2, '0')}`;

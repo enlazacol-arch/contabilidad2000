@@ -22,6 +22,8 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 // Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
 const { clasificarMovimiento, aplicarCorreccionesCliente, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
+// Mes contable (en qué mes se causa) vs. fecha de emisión -- ver public/mes-contable.js.
+const { mesContableValido, mesContableDeFactura, fechaAsientoContable } = require('./public/mes-contable');
 // PUC propio de cada cliente (niveles, cuentas obsoletas, cuenta por tarifa)
 const pucCliente = require('./public/puc-cliente');
 // Contabilidad anterior del cliente (Auxiliar General / Listado de movimientos)
@@ -172,6 +174,10 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor BOOLEAN DEFAULT false;`);
   // Perfil fiscal del emisor tal como lo dice el documento (prompt v4) --
   // ver normalizarPerfilFiscalDocumento() en public/retenciones.js.
+  // Mes contable ('AAAA-MM') en que el contador causa la factura -- puede
+  // ser distinto del mes de emisión (fecha_factura). Ver el relleno de
+  // las ya aprobadas más abajo, después de aprobado_por_contador.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS mes_contable TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica_municipio TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gran_contribuyente BOOLEAN DEFAULT false;`);
@@ -784,6 +790,15 @@ async function ensureSchema() {
       `INSERT INTO migraciones_app (nombre) VALUES ('backfill_aprobado_por_contador') ON CONFLICT DO NOTHING`
     );
   }
+  // Las facturas ya aprobadas sin mes contable (de antes de existir el
+  // campo) quedan en su mes de emisión -- así no se mueve nada de lo ya
+  // causado. Las pendientes quedan vacías: el contador lo decide al
+  // revisarlas. Va DESPUÉS de crear aprobado_por_contador (en una base
+  // nueva esa columna todavía no existe más arriba).
+  await pool.query(
+    `UPDATE invoices SET mes_contable = split_part(fecha_factura, '/', 3) || '-' || LPAD(split_part(fecha_factura, '/', 2), 2, '0')
+      WHERE COALESCE(mes_contable, '') = '' AND aprobado_por_contador = true AND fecha_factura ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'`
+  );
 
   // Qué modelo de Gemini y qué versión del prompt de extracción generó
   // esta factura (tarea "versión del prompt/modelo" de la hoja de ruta)
@@ -1637,14 +1652,14 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
       await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [asientoId]);
       await pool.query(
         `UPDATE asientos_contables SET fecha = $2, descripcion = $3, creado_at = now() WHERE id = $1`,
-        [asientoId, invoiceRow.fecha_factura || '', descripcion]
+        [asientoId, fechaAsientoContable(invoiceRow), descripcion]
       );
     } else {
       asientoId = crypto.randomUUID();
       await pool.query(
         `INSERT INTO asientos_contables (id, contador_id, invoice_id, fecha, descripcion, estado, generado_por)
          VALUES ($1,$2,$3,$4,$5,'propuesto','ia')`,
-        [asientoId, contadorId, invoiceRow.id, invoiceRow.fecha_factura || '', descripcion]
+        [asientoId, contadorId, invoiceRow.id, fechaAsientoContable(invoiceRow), descripcion]
       );
     }
 
@@ -1674,6 +1689,7 @@ const SAVED_FIELDS = [
   'archivo_original', 'archivo_original_tipo',
   'autorretenedor_ica', 'autorretenedor_ica_municipio', 'gran_contribuyente', 'agente_retencion_iva', 'responsable_iva',
   'nota_retencion', 'nota_retencion_tarifa', 'nota_retencion_base',
+  'mes_contable',
 ];
 
 function rowToInvoice(row) {
@@ -2466,11 +2482,8 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
     const { month } = req.query;
     if (!month) return res.json(invoices);
 
-    const filtered = invoices.filter((inv) => {
-      const [d, m, y] = (inv.fecha_factura || '').split('/');
-      if (!d || !m || !y) return false;
-      return `${y}-${m.padStart(2, '0')}` === month;
-    });
+    // Por MES CONTABLE (en qué mes se causó), no por fecha de emisión.
+    const filtered = invoices.filter((inv) => mesContableDeFactura(inv) === month);
     res.json(filtered);
   } catch (err) {
     console.error('Error leyendo facturas:', err);
@@ -2786,6 +2799,9 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       }
     }
 
+    if (req.body.mes_contable && !mesContableValido(req.body.mes_contable)) {
+      return res.status(400).json({ error: 'El mes contable no es válido -- elige un mes (AAAA-MM).' });
+    }
     const sinIvaGuardado = Number(req.body.valor_sin_iva) || 0;
     const ivaGuardado = Number(req.body.valor_iva) || 0;
     const conIvaGuardado = Number(req.body.valor_con_iva) || 0;
@@ -2951,7 +2967,7 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 // el documento de otro proveedor por completo), la salida sigue siendo
 // borrar la factura y volver a escanearla/digitarla.
 const CAMPOS_EDITABLES_FACTURA = [
-  'dv', 'fecha_factura', 'concepto',
+  'dv', 'fecha_factura', 'concepto', 'mes_contable',
   'categoria_concepto', 'subcuenta_gasto',
   'rete_fuente', 'rete_iva', 'rete_ica', 'valor_iva',
 ];
@@ -2981,6 +2997,9 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
         values.push(String(req.body[campo] ?? ''));
         i++;
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'mes_contable') && req.body.mes_contable && !mesContableValido(req.body.mes_contable)) {
+      return res.status(400).json({ error: 'El mes contable no es válido -- elige un mes (AAAA-MM).' });
     }
     if (Object.prototype.hasOwnProperty.call(req.body, 'valor_sin_iva') && tieneItems) {
       return res.status(400).json({ error: 'Esta factura tiene ítems línea por línea -- el subtotal se edita ahí (PUT /api/invoices/:id/items), no directo en la cabecera.' });
@@ -3272,7 +3291,7 @@ async function aprobarAsientoSiCuadra(invoiceId) {
 app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const factura = await pool.query(
-      'SELECT id, aprobado_por_contador, cliente_id FROM invoices WHERE id = $1 AND contador_id = $2',
+      'SELECT id, aprobado_por_contador, cliente_id, mes_contable, fecha_factura FROM invoices WHERE id = $1 AND contador_id = $2',
       [req.params.id, req.firmaId]
     );
     if (factura.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
@@ -3281,10 +3300,24 @@ app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 
       return res.status(400).json({ error: 'Esta factura ya estaba aprobada.' });
     }
 
+    // El mes contable lo decide el contador: sin él no se aprueba (no se
+    // asume el de emisión). Puede venir en este mismo pedido.
+    const mesPedido = req.body && req.body.mes_contable;
+    if (mesPedido !== undefined && mesPedido !== '' && !mesContableValido(mesPedido)) {
+      return res.status(400).json({ error: 'El mes contable no es válido -- elige un mes (AAAA-MM).' });
+    }
+    const mesContable = mesContableValido(mesPedido) ? mesPedido : factura.rows[0].mes_contable;
+    if (!mesContableValido(mesContable)) {
+      return res.status(400).json({ error: 'Falta el mes contable: elige en qué mes se causa esta factura antes de aprobarla.', falta_mes_contable: true });
+    }
+
     const { rows } = await pool.query(
-      `UPDATE invoices SET aprobado_por_contador = true, aprobado_at = now() WHERE id = $1 RETURNING id, aprobado_por_contador, aprobado_at`,
-      [req.params.id]
+      `UPDATE invoices SET aprobado_por_contador = true, aprobado_at = now(), mes_contable = $2 WHERE id = $1 RETURNING id, aprobado_por_contador, aprobado_at, mes_contable`,
+      [req.params.id, mesContable]
     );
+    // El asiento queda fechado dentro del mes contable (ver fechaAsientoContable).
+    await pool.query('UPDATE asientos_contables SET fecha = $2 WHERE invoice_id = $1',
+      [req.params.id, fechaAsientoContable({ fecha_factura: factura.rows[0].fecha_factura, mes_contable: mesContable })]);
     // Aparte de aprobar la factura -- ver aprobarAsientoSiCuadra() arriba,
     // que deja registrado si el asiento quedó aprobado junto con ella o
     // si se quedó pendiente de que el contador lo corrija.

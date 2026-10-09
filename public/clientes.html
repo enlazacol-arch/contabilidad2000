@@ -212,14 +212,15 @@
 
     <div class="form-section">
       <div class="form-section-title">Datos básicos</div>
+      <p class="leyenda-obligatorios"><span class="requerido" aria-hidden="true">*</span>Obligatorio para poder guardar.</p>
       <div class="form-row">
         <div class="field">
-          <label>Nombre o razón social</label>
-          <input type="text" id="inputNombre" placeholder="Industrias Codcol S.A.S.">
+          <label>Nombre o razón social <span class="requerido" aria-hidden="true">*</span></label>
+          <input type="text" id="inputNombre" placeholder="Industrias Codcol S.A.S." aria-required="true">
         </div>
         <div class="field">
-          <label>NIT</label>
-          <input type="text" id="inputNit" placeholder="901943255">
+          <label>NIT <span class="requerido" aria-hidden="true">*</span></label>
+          <input type="text" id="inputNit" placeholder="901943255" aria-required="true">
         </div>
         <div class="field">
           <label>DV</label>
@@ -351,11 +352,11 @@
     </div>
 
     <div class="form-section">
-      <div class="form-section-title">Contacto principal</div>
+      <div class="form-section-title">Contacto principal <span class="requerido" aria-hidden="true">*</span> <span style="font-weight:400; text-transform:none; letter-spacing:0;">(nombre y al menos un teléfono o correo)</span></div>
       <div class="form-row cols-4">
         <div class="field">
-          <label>Nombre</label>
-          <input type="text" id="inputContactoNombre" placeholder="María Pérez">
+          <label>Nombre <span class="requerido" aria-hidden="true">*</span></label>
+          <input type="text" id="inputContactoNombre" placeholder="María Pérez" aria-required="true">
         </div>
         <div class="field">
           <label>Cargo</label>

@@ -861,3 +861,12 @@ html:has(.file-modal.show, .modal-doc.show, .modal-plantilla.show, .modal-valida
   font-family:var(--font-ui); font-size:var(--t-14); color:var(--text-2);
   padding:var(--s-8) var(--s-4); text-align:center;
 }
+
+/* ---------- Campos obligatorios ----------
+   Un * rojo junto a la etiqueta de cada campo sin el cual NO se puede
+   guardar (cliente, factura, tarifa de ICA, etc.), y una leyenda que lo
+   explica. Uso: <label>NIT <span class="requerido" aria-hidden="true">*</span></label>
+   y aria-required="true" en el campo. */
+.requerido{ color:var(--err, #B42318); font-weight:700; margin-left:2px; }
+.leyenda-obligatorios{ font-size:var(--t-12, 12px); color:var(--text-3, #566D79); margin:0 0 var(--s-3, 12px); }
+.leyenda-obligatorios .requerido{ margin:0 2px 0 0; }

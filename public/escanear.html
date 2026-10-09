@@ -16,6 +16,7 @@
 <script src="/motivo-sin-retencion.js"></script>
 <script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
+<script src="/mes-contable.js"></script>
 <script src="/excepciones.js"></script>
 <style>
   /* Estilos propios de esta página (el resto vive en styles.css) */
@@ -704,15 +705,15 @@ const FIELDS = [
   {key:"letras_fe", label:"Letras F-E"},
   {key:"numeros_fe", label:"Números F-E"},
   {key:"fecha_factura", label:"Fecha Factura"},
-  {key:"valor_sin_iva", label:"Valor Sin IVA", money:true},
+  {key:"valor_sin_iva", label:"Valor Sin IVA", money:true, obligatorio:true},
   {key:"valor_iva", label:"Valor IVA", money:true},
-  {key:"valor_con_iva", label:"Valor Con IVA", money:true},
+  {key:"valor_con_iva", label:"Valor Con IVA", money:true, obligatorio:true},
   {key:"valor_abonado", label:"Valor ya abonado (anticipo)", money:true},
   {key:"rete_fuente", label:"Rete Fuente", money:true},
   {key:"rete_iva", label:"Rete IVA", money:true},
   {key:"rete_ica", label:"Rete ICA", money:true},
   {key:"concepto", label:"Concepto"},
-  {key:"numero_digitacion", label:"Número de digitación (comprobante contable)"},
+  {key:"numero_digitacion", label:"Número de digitación (comprobante contable)", obligatorio:true},
   {key:"categoria_concepto", label:"Categoría (retención)", select:[
     ["compras","Compras (bienes)"],
     ["compras_tarjeta","Compras con tarjeta débito/crédito"],
@@ -2024,7 +2025,7 @@ function renderResult(data){
     currentDesgloseCategorias = desgloseDesdeItems(currentItems);
   }
 
-  ledger.innerHTML = '';
+  ledger.innerHTML = '<p class="leyenda-obligatorios"><span class="requerido" aria-hidden="true">*</span>Obligatorio para poder guardar.</p>';
   FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
     row.className = 'field-row';
@@ -2033,6 +2034,9 @@ function renderResult(data){
     const label = document.createElement('div');
     label.className = 'field-label';
     label.textContent = f.label;
+    // * en los campos sin los cuales no deja guardar (ver guardarFactura /
+    // CAMPOS_VALOR_OBLIGATORIOS).
+    if (f.obligatorio) label.insertAdjacentHTML('beforeend', ' <span class="requerido" aria-hidden="true">*</span>');
 
     const valueWrap = document.createElement('div');
     valueWrap.className = 'field-value' + (f.money ? ' money' : '');
@@ -2073,6 +2077,7 @@ function renderResult(data){
       }
     }
     input.dataset.key = f.key;
+    if (f.obligatorio) input.setAttribute('aria-required', 'true');
 
     valueWrap.appendChild(input);
     row.appendChild(label);
@@ -2283,6 +2288,25 @@ function renderResult(data){
     }
 
     ledger.appendChild(row);
+
+    // Debajo de la fecha de emisión: el MES CONTABLE en que se causa (lo
+    // decide el contador -- no se llena solo; se exige al aprobar en
+    // Revisión). Lleva data-key, así se conserva al ir y volver entre
+    // capturas de la cola como cualquier otro campo.
+    if (f.key === 'fecha_factura') {
+      const mesRow = document.createElement('div');
+      mesRow.className = 'field-row';
+      const mesLabel = document.createElement('div');
+      mesLabel.className = 'field-label';
+      mesLabel.textContent = 'Mes contable';
+      const mesWrap = document.createElement('div');
+      mesWrap.className = 'field-value';
+      const mesInput = renderSelectorMesContable(mesWrap, { valor: data.mes_contable || '', fechaFactura: input.value });
+      mesInput.dataset.key = 'mes_contable';
+      mesRow.appendChild(mesLabel);
+      mesRow.appendChild(mesWrap);
+      ledger.appendChild(mesRow);
+    }
 
     // Debajo de la categoría, un segundo selector con las subcuentas
     // reales del PUC para esa categoría -- el contador elige la
@@ -3504,6 +3528,8 @@ function currentFieldValues(){
     out[f.key] = val;
   });
   out.tipo_movimiento = currentTipoMovimiento;
+  const mesContableInput = ledger.querySelector('input[data-key="mes_contable"]');
+  out.mes_contable = mesContableInput && mesContableValido(mesContableInput.value) ? mesContableInput.value : '';
   out.cliente_id = currentClienteId || '';
   out.regimen_simple = currentRegimenSimple;
   out.autorretenedor = currentAutorretenedor;

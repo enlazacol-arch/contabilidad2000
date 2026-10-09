@@ -13,6 +13,7 @@
 <script src="/retenciones.js"></script>
 <script src="/movimiento.js"></script>
 <script src="/excepciones.js"></script>
+<script src="/mes-contable.js"></script>
 <style>
   /* Esta página muestra una tabla de datos densa -- necesita mucho más
      espacio horizontal que el ancho angosto (900px) pensado para
@@ -695,7 +696,7 @@ function formatCOP(value){
 }
 
 function populateMonths(invoices){
-  const keys = new Set(invoices.map(inv => monthKeyFromFecha(inv.fecha_factura)).filter(Boolean));
+  const keys = new Set(invoices.map(inv => mesContableDeFactura(inv)).filter(Boolean));
   const now = new Date();
   const currentKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   keys.add(currentKey);
@@ -706,7 +707,7 @@ function populateMonths(invoices){
     const [y, m] = key.split('-');
     const opt = document.createElement('option');
     opt.value = key;
-    opt.textContent = `${MONTH_NAMES[Number(m)-1]} ${y}`;
+    opt.textContent = `Mes contable: ${MONTH_NAMES[Number(m)-1]} ${y}`;
     monthSelect.appendChild(opt);
   });
   monthSelect.value = currentKey;
@@ -716,7 +717,7 @@ function renderTable(){
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
   const clientInvoices = invoicesForSelectedClient();
-  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const monthInvoices = clientInvoices.filter(inv => mesContableDeFactura(inv) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   tbody.innerHTML = '';
@@ -1106,7 +1107,7 @@ btnExport.addEventListener('click', () => {
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
   const clientInvoices = invoicesForSelectedClient();
-  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const monthInvoices = clientInvoices.filter(inv => mesContableDeFactura(inv) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   if (filtered.length === 0) {
@@ -1265,7 +1266,7 @@ function exportarConPlantilla(plantilla) {
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
   const clientInvoices = invoicesForSelectedClient();
-  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const monthInvoices = clientInvoices.filter(inv => mesContableDeFactura(inv) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
   if (filtered.length === 0) { Aviso.mostrar('No hay facturas en este mes para exportar.', { tipo: 'advertencia' }); return; }
 
