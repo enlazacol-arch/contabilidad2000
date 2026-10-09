@@ -2522,6 +2522,12 @@ function renderResult(data){
   // no siempre coincide con el escrito en cifras. Se avisa ANTES de
   // seguir con cualquier cálculo, para que el contador confirme cuál de
   // los dos es el correcto contra el documento original.
+  if (data.aviso_valores) {
+    avisos.push({ titulo: '⚠ Subtotal corregido', texto: data.aviso_valores });
+  }
+  if (data.aviso_segmentacion) {
+    avisos.push({ titulo: '⚠ Factura reunida', texto: data.aviso_segmentacion });
+  }
   const valorLetrasNumero = Number(data.valor_letras_numero) || 0;
   const valorConIvaNumero = Number(data.valor_con_iva) || 0;
   if (tieneExcepcion(data, 'letras_no_coincide')) {
@@ -3257,6 +3263,12 @@ function onItemsChanged(){
   if (sinIvaInput && currentItems.length > 0) {
     const sumaItems = currentItems.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
     sinIvaInput.value = sumaItems.toLocaleString('es-CO');
+    // El total también (subtotal + IVA) -- antes quedaba el total viejo.
+    const conIvaInput = ledger.querySelector('input[data-key="valor_con_iva"]');
+    if (conIvaInput) {
+      conIvaInput.value = (sumaItems + (ivaInput ? parseMoneyValue(ivaInput.value) : 0)).toLocaleString('es-CO');
+      conIvaInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   }
   renderItemsPanel();
   if (catSelect && currentInvoiceData) {

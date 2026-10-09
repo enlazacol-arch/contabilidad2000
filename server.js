@@ -1719,6 +1719,8 @@ const CAMPOS_FACTURA_EXISTENTE = `
 // evaluarDuplicado() (duplicados.js, con las reglas y su porqué).
 // `clienteId` habilita la regla "el mismo gasto con otro soporte".
 const { evaluarDuplicado } = require('./duplicados');
+const { unirFacturasPartidas } = require('./segmentacion');
+const { corregirSubtotalConItems } = require('./cuadre-valores');
 async function buscarPosibleDuplicado(contadorId, f, clienteId) {
   const nit = normalizarNit(f.nit_cc);
   const numero = String(f.numeros_fe || '').replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toUpperCase();
@@ -3926,7 +3928,7 @@ const CAMPOS_FACTURA_JSON = `{
   "letras_fe": "prefijo alfabético de la factura electrónica si existe (ej: FE, SETP), si no existe cadena vacía",
   "numeros_fe": "número o consecutivo de la factura electrónica, solo el número",
   "fecha_factura": "fecha de la factura en formato DD/MM/AAAA",
-  "valor_sin_iva": "subtotal ANTES de IVA, en pesos colombianos ENTEROS (ver regla de formato abajo)",
+  "valor_sin_iva": "subtotal ANTES de IVA de TODA la factura, en pesos colombianos ENTEROS (ver regla de formato abajo) -- la suma de TODAS las líneas, incluidas las exentas o excluidas (IVA 0%), no solo la parte gravada con IVA. Ej.: una línea de servicio de $2.909.057 al 0% y una de AIU de $290.906 al 19% dan un valor_sin_iva de $3.199.963, no $290.906. Casi siempre es el 'SUBTOTAL' impreso.",
   "valor_iva": "valor del IVA (impuesto), en pesos colombianos ENTEROS. Si la factura no discrimina IVA, usa 0",
   "valor_con_iva": "valor TOTAL de la factura ANTES de descontar retenciones (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. OJO: algunas facturas y cuentas de cobro muestran como 'Total a pagar' o 'Neto a pagar' un valor que YA RESTÓ la Retención en la Fuente, ReteIVA o ReteICA -- en ese caso NO uses ese neto: usa el total antes de retenciones (subtotal + IVA) y anota cada retención descontada en su propio campo (rete_fuente, rete_iva, rete_ica).",
   "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
@@ -3991,7 +3993,10 @@ ${REGLAS_FORMATO_VALORES}`;
 // una factura vieja se ve mal leída, se sepa exactamente qué modelo y
 // qué versión del prompt la generó -- barato de dejar registrado ahora,
 // imposible de reconstruir después con precisión.
-const INVOICE_PROMPT_VERSION = 'v4'; // v4: perfil fiscal del emisor (autorretenedor renta/ICA, gran contribuyente, retenedor IVA, responsable IVA) y nota de retención
+// v4: perfil fiscal del emisor y nota de retención.
+// v5: paquete -- las líneas de la tabla de una factura nunca son documentos distintos;
+//     valor_sin_iva incluye las líneas exentas (0% IVA), no solo la base gravada.
+const INVOICE_PROMPT_VERSION = 'v5';
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -4011,6 +4016,8 @@ Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos 
 - Cambia el TIPO de documento (ej. termina una factura y empieza un extracto bancario o un comprobante de pago).
 
 En una FOTO, cada documento es un papel físico distinto: bordes de papel separados, cada uno con su propio emisor, número y total. Léelos uno por uno, de izquierda a derecha y de arriba abajo, sin mezclar los valores de un papel con los de otro. Un solo papel fotografiado (aunque se vea torcido, doblado o con sombras) es UN solo documento.
+
+NUNCA separes en documentos distintos las LÍNEAS de la tabla de ítems de una misma factura (ej. "SERVICIO ASEO" y "AIU", o un producto y su mano de obra): son renglones de UN documento, con un solo emisor, un solo número de factura y un solo total. Si dos partes tienen el mismo emisor y el mismo número de factura, son el MISMO documento.
 
 NO cortes un documento en varios solo porque tenga varias páginas: una factura de dos o tres páginas donde la tabla de ítems continúa de una página a la siguiente (mismo emisor, mismo consecutivo, mismo total) sigue siendo UN SOLO documento. La gran mayoría de los archivos que vas a recibir traen un solo documento -- solo segmenta en varios cuando de verdad encuentres las señales de arriba.
 
@@ -4260,6 +4267,11 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     parsed.confianza_campos.nit_cc = Math.min(Number(parsed.confianza_campos.nit_cc ?? 1), 0.3);
   }
 
+  // Subtotal que dejó por fuera líneas de la factura (ej. solo la parte
+  // gravada con IVA): si las líneas + IVA dan el valor en letras, manda
+  // eso -- ver cuadre-valores.js (caso Manos Activas SI 43076).
+  corregirSubtotalConItems(parsed);
+
   // Total con IVA: algunas facturas muestran como total el neto que YA
   // restó las retenciones. Si el total leído es exactamente subtotal +
   // IVA - retenciones, se corrige al total ANTES de retenciones (que es
@@ -4385,18 +4397,27 @@ async function procesarPaqueteDocumento(userId, base64, effectiveMediaType, forz
     throw err;
   }
 
-  const documentos = [];
+  // Primero se pos-procesa cada documento; después, las partes de una
+  // misma factura que la IA haya separado (mismo emisor y número) se
+  // vuelven a unir -- ver segmentacion.js (caso Manos Activas SI 43076).
+  const rechazados = [];
+  const leidos = [];
   for (let i = 0; i < crudos.length; i++) {
     const parsed = crudos[i] && typeof crudos[i] === 'object' ? crudos[i] : {};
     const resultado = await posprocesarDocumentoExtraido(userId, parsed);
+    if (resultado.ok) leidos.push(resultado.data);
+    else rechazados.push({ tipo: 'rechazado', mensaje: resultado.publicMessage });
+  }
+  const unidos = unirFacturasPartidas(leidos);
+  if (unidos.length < leidos.length) {
+    console.log(`[segmentacion] ${leidos.length} documentos leídos -> ${unidos.length} tras unir facturas partidas`);
+  }
 
-    if (!resultado.ok) {
-      documentos.push({ tipo: 'rechazado', mensaje: resultado.publicMessage });
-      continue;
-    }
-
-    const data = resultado.data;
-    data.file_hash = crudos.length > 1 ? `${fileHashArchivo}-${i + 1}` : fileHashArchivo;
+  const documentos = [];
+  const totalDocumentos = unidos.length + rechazados.length;
+  for (let i = 0; i < unidos.length; i++) {
+    const data = unidos[i];
+    data.file_hash = totalDocumentos > 1 ? `${fileHashArchivo}-${i + 1}` : fileHashArchivo;
 
     if (!forzar) {
       try {
@@ -4412,6 +4433,7 @@ async function procesarPaqueteDocumento(userId, base64, effectiveMediaType, forz
 
     documentos.push({ tipo: 'factura', data });
   }
+  documentos.push(...rechazados);
 
   return { documentos };
 }
