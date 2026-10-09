@@ -1181,6 +1181,9 @@ function detectClient(data){
   if (clientePreseleccionado) {
     const c = clientePreseleccionado;
     const clasif = clasificarMovimiento(data, myClients, { clienteFijo: c });
+    // NIT/nombre del lado del cliente vacíos o mal leídos: se completan
+    // con los de su ficha antes de dibujar los campos (ver movimiento.js).
+    aplicarCorreccionesCliente(data, clasif);
     avisoMovimiento = clasif.aviso || '';
     const esComprador = clasif.motivo === 'adquiriente';
     const esVendedor = clasif.motivo === 'emisor';
@@ -1206,6 +1209,7 @@ function detectClient(data){
   // ADQUIRIENTE (compró), ingreso si es el EMISOR (vendió). Compara los
   // NIT normalizados -- antes "900.123.456-7" no coincidía con "900123456".
   const clasif = clasificarMovimiento(data, myClients);
+  aplicarCorreccionesCliente(data, clasif);
   avisoMovimiento = clasif.aviso || '';
   const asComprador = clasif.motivo === 'adquiriente' ? clasif.cliente : null;
   const asVendedor = clasif.motivo === 'emisor' ? clasif.cliente : null;

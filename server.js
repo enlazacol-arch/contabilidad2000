@@ -18,7 +18,7 @@ const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCatego
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 // Regla única de ingreso/egreso (la misma que usan Escanear y Carga masiva)
-const { clasificarMovimiento, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
+const { clasificarMovimiento, aplicarCorreccionesCliente, limpiarNitLeido, nitTieneTexto, calcularDvNit } = require('./public/movimiento');
 // PUC propio de cada cliente (niveles, cuentas obsoletas, cuenta por tarifa)
 const pucCliente = require('./public/puc-cliente');
 // Contabilidad anterior del cliente (Auxiliar General / Listado de movimientos)
@@ -4367,6 +4367,9 @@ async function detectarClienteYMovimientoServidor(contadorId, data, clienteFijoI
   const { rows: clientes } = await pool.query('SELECT id, nit, dv, nombre FROM clients WHERE contador_id = $1', [contadorId]);
   const clienteFijo = clienteFijoId ? clientes.find((c) => c.id === clienteFijoId) || null : null;
   const r = clasificarMovimiento(data, clientes, { clienteFijo });
+  // Completa en `data` (que se guarda tal cual en el lote) el NIT/nombre
+  // del lado del cliente si vinieron vacíos o mal leídos.
+  aplicarCorreccionesCliente(data, r);
   return { clienteId: r.clienteId, tipoMovimiento: r.tipoMovimiento, confiado: r.confiado, motivo: r.motivo, otroClienteId: r.otroClienteId, aviso: r.aviso };
 }
 
