@@ -131,13 +131,50 @@ async function crearLote(contadorId, clienteId, archivos, usuarioId) {
   return loteId;
 }
 
+// Agrega UN archivo a un lote que se va llenando de a poco (las fotos
+// que llegan desde el celular con el QR, ver captura-movil.js). El
+// lote se crea con la primera foto (ON CONFLICT: dos fotos que llegan a
+// la vez no crean dos lotes) y, si ya había terminado de leer las
+// anteriores, se reabre. El archivo se inserta ANTES de reabrir el
+// lote: así cerrarLotesSinPendientes() nunca lo cierra con una foto
+// pendiente adentro.
+async function agregarArchivoALote(loteId, contadorId, clienteId, usuarioId, archivo) {
+  await pool.query(
+    `INSERT INTO lotes_procesamiento (id, contador_id, cliente_id, estado, total_items, usuario_id)
+     VALUES ($1, $2, $3, 'en_cola', 0, $4) ON CONFLICT (id) DO NOTHING`,
+    [loteId, contadorId, clienteId || null, usuarioId || null]
+  );
+  const itemId = crypto.randomUUID();
+  await pool.query(
+    `INSERT INTO lote_items (id, lote_id, orden, nombre_archivo, base64, media_type, es_pdf, estado)
+     VALUES ($1, $2, (SELECT COUNT(*) FROM lote_items WHERE lote_id = $2), $3, $4, $5, $6, 'pendiente')`,
+    [itemId, loteId, archivo.nombre || '', archivo.base64 || '', archivo.mediaType || '', !!archivo.isPdf]
+  );
+  await pool.query(
+    `UPDATE lotes_procesamiento
+        SET total_items = total_items + 1,
+            estado = CASE WHEN estado = 'completado' THEN 'en_cola' ELSE estado END,
+            updated_at = now()
+      WHERE id = $1`,
+    [loteId]
+  );
+  dispararProcesamiento();
+  return itemId;
+}
+
 // El "motor" de la cola -- lee un archivo pendiente a la vez, por
 // turnos entre los lotes en curso (el lote que hace más tiempo no
 // recibe turno va primero; ver siguienteItemPorTurno). Si ya hay un
 // procesamiento en curso en este mismo proceso de Node, no arranca dos.
+// Si llega trabajo nuevo mientras el ciclo está terminando (ya no vio
+// nada pendiente pero todavía no soltó procesandoAhora), se marca para
+// dar una vuelta más en vez de dejar ese archivo esperando.
+let hayTrabajoNuevo = false;
+
 async function dispararProcesamiento() {
-  if (procesandoAhora) return;
+  if (procesandoAhora) { hayTrabajoNuevo = true; return; }
   procesandoAhora = true;
+  hayTrabajoNuevo = false;
   try {
     while (true) {
       const item = await siguienteItemPorTurno();
@@ -163,6 +200,7 @@ async function dispararProcesamiento() {
     console.error('Error en el procesamiento de lotes en segundo plano:', err);
   } finally {
     procesandoAhora = false;
+    if (hayTrabajoNuevo) dispararProcesamiento();
   }
 }
 
@@ -435,6 +473,7 @@ module.exports = {
   init,
   asegurarSchemaLotes,
   crearLote,
+  agregarArchivoALote,
   dispararProcesamiento,
   reintentarItem,
   eliminarItem,

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0B4F6C">
+<meta name="robots" content="noindex">
+<title>Enlaza — Fotos desde el celular</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:ital,wght@0,400..800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* Página para el celular: se abre desde el código QR que muestran
+     Escanear y Carga masiva en el computador (ver captura-movil.js).
+     No pide sesión -- el token del QR solo deja subir fotos. */
+  body{ min-height:100dvh; background:var(--paper-sunken, var(--n-100)); }
+  .cm-top{
+    display:flex; align-items:center; gap:10px;
+    padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;
+    background:var(--pet-600); color:#fff;
+  }
+  .cm-top img{ width:30px; height:30px; border-radius:8px; background:#fff; padding:3px; }
+  .cm-top span{ font-family:var(--font-display); font-weight:800; font-size:18px; }
+  .cm-main{ max-width:520px; margin:0 auto; padding:16px 16px calc(env(safe-area-inset-bottom) + 24px); }
+
+  .cm-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg);
+    box-shadow:var(--shadow-sm); padding:18px;
+  }
+  .cm-para{ font-size:var(--t-12); text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); font-weight:600; }
+  .cm-cliente{ font-family:var(--font-display); font-weight:800; font-size:22px; color:var(--text); margin-top:2px; line-height:1.2; overflow-wrap:anywhere; }
+  .cm-vence{ font-size:var(--t-13); color:var(--text-2); margin-top:6px; }
+
+  .cm-acciones{ display:flex; flex-direction:column; gap:10px; margin-top:16px; }
+  .cm-btn-foto{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    min-height:64px; font-size:18px; font-weight:700; border-radius:var(--r-md);
+    touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  }
+  .cm-btn-galeria{ min-height:48px; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+  .cm-acciones input[type=file]{ display:none; }
+
+  .cm-consejos{ margin:14px 2px 0; padding:0; list-style:none; font-size:var(--t-13); color:var(--text-2); display:grid; gap:4px; }
+  .cm-consejos li::before{ content:'✓ '; color:var(--ok); font-weight:700; }
+
+  .cm-resumen{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    margin:22px 2px 10px; font-size:var(--t-13); color:var(--text-2);
+  }
+  .cm-resumen b{ color:var(--text); font-size:var(--t-14); }
+  .cm-lista{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; }
+  .cm-foto{
+    position:relative; aspect-ratio:3/4; border-radius:var(--r-sm); overflow:hidden;
+    background:var(--surface); border:1px solid var(--line);
+  }
+  .cm-foto img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .cm-foto .cm-pdf{ display:flex; align-items:center; justify-content:center; height:100%; font-weight:700; color:var(--text-3); }
+  .cm-estado{
+    position:absolute; left:6px; right:6px; bottom:6px;
+    font-size:11px; font-weight:700; text-align:center; border-radius:var(--r-pill); padding:3px 6px;
+    background:rgba(255,255,255,.92); color:var(--text-2);
+  }
+  .cm-foto.ok .cm-estado{ background:var(--ok-bg); color:var(--ok); }
+  .cm-foto.error .cm-estado{ background:var(--err-bg); color:var(--err); }
+  .cm-foto.error{ border-color:var(--err-line); }
+  .cm-reintentar{
+    position:absolute; inset:0; width:100%; background:transparent; border:none; cursor:pointer;
+  }
+  .cm-foto.subiendo img{ opacity:.55; }
+
+  .cm-aviso{
+    text-align:center; padding:36px 22px;
+  }
+  .cm-aviso .cm-icono{ font-size:40px; }
+  .cm-aviso h1{ font-family:var(--font-display); font-size:22px; margin:10px 0 8px; color:var(--text); }
+  .cm-aviso p{ margin:0; color:var(--text-2); font-size:var(--t-14); line-height:1.5; }
+
+  .cm-cargando{ text-align:center; padding:48px 0; color:var(--text-2); }
+  @media (prefers-reduced-motion:no-preference){
+    .cm-foto.subiendo .cm-estado{ animation:cmPulso 1.2s ease-in-out infinite; }
+    @keyframes cmPulso{ 50%{ opacity:.55; } }
+  }
+</style>
+</head>
+<body>
+<div class="cm-top">
+  <img src="/img/logo-icon.png" alt="">
+  <span>Enlaza</span>
+</div>
+
+<main class="cm-main">
+  <div id="cmCargando" class="cm-cargando">Validando el código QR…</div>
+
+  <div id="cmInvalido" class="cm-card cm-aviso" hidden>
+    <div class="cm-icono" aria-hidden="true">⌛</div>
+    <h1>Código no disponible</h1>
+    <p id="cmInvalidoTexto"></p>
+  </div>
+
+  <div id="cmActivo" hidden>
+    <section class="cm-card">
+      <div class="cm-para">Fotos de facturas para</div>
+      <div class="cm-cliente" id="cmCliente"></div>
+      <div class="cm-vence" id="cmVence"></div>
+
+      <div class="cm-acciones">
+        <button type="button" class="btn primary cm-btn-foto" id="cmBtnFoto">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+          Tomar foto
+        </button>
+        <button type="button" class="btn ghost cm-btn-galeria" id="cmBtnGaleria">Elegir de la galería (fotos o PDF)</button>
+        <input type="file" id="cmInputFoto" accept="image/*" capture="environment">
+        <input type="file" id="cmInputGaleria" accept="image/*,application/pdf" multiple>
+      </div>
+
+      <ul class="cm-consejos">
+        <li>Una factura por foto, completa y derecha.</li>
+        <li>Buena luz, sin sombras ni reflejos.</li>
+        <li>Puedes seguir tomando fotos sin esperar.</li>
+      </ul>
+    </section>
+
+    <div class="cm-resumen" id="cmResumen" hidden>
+      <span id="cmResumenTexto"></span>
+    </div>
+    <div class="cm-lista" id="cmLista" aria-live="polite"></div>
+  </div>
+</main>
+
+<script src="/comprimir-imagen.js"></script>
+<script>
+'use strict';
+
+// El token viene en el fragmento (#t=...) para que no quede en los logs
+// del servidor; se guarda en sessionStorage (por si se recarga la
+// página) y se borra de la barra de direcciones.
+const CLAVE_TOKEN = 'enlaza_captura_token';
+function leerToken(){
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const t = hash.get('t');
+  if (t) {
+    try { sessionStorage.setItem(CLAVE_TOKEN, t); } catch (e) { /* modo privado: solo se pierde al recargar */ }
+    history.replaceState(null, '', location.pathname);
+    return t;
+  }
+  try { return sessionStorage.getItem(CLAVE_TOKEN) || ''; } catch (e) { return ''; }
+}
+const token = leerToken();
+
+const fotos = []; // { id, nombre, urlVista, esPdf, estado:'en_espera'|'subiendo'|'ok'|'error', error, archivo }
+let siguienteId = 1;
+let subiendo = false;
+
+function mostrarInvalido(mensaje){
+  document.getElementById('cmCargando').hidden = true;
+  document.getElementById('cmActivo').hidden = true;
+  document.getElementById('cmInvalido').hidden = false;
+  document.getElementById('cmInvalidoTexto').textContent = mensaje;
+}
+
+function horaCorta(fecha){
+  return new Date(fecha).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+}
+
+async function validar(){
+  if (!token) { mostrarInvalido('Abre esta página escaneando el código QR que aparece en Enlaza, en Escanear o Carga masiva del computador.'); return; }
+  try {
+    const res = await fetch('/api/captura-movil-publica', { headers: { 'X-Captura-Token': token } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { mostrarInvalido(data.error || 'Este código QR no es válido.'); return; }
+    document.getElementById('cmCliente').textContent = data.clienteNombre || 'Cliente';
+    document.getElementById('cmVence').textContent = 'Código válido hasta las ' + horaCorta(data.expiraAt);
+    document.getElementById('cmCargando').hidden = true;
+    document.getElementById('cmActivo').hidden = false;
+    renderLista();
+  } catch (e) {
+    mostrarInvalido('No hay conexión con Enlaza. Revisa el internet del celular y vuelve a escanear el código.');
+  }
+}
+
+function renderLista(){
+  const lista = document.getElementById('cmLista');
+  lista.innerHTML = '';
+  fotos.slice().reverse().forEach((f) => {
+    const div = document.createElement('div');
+    div.className = 'cm-foto ' + f.estado;
+    if (f.esPdf) {
+      const pdf = document.createElement('div');
+      pdf.className = 'cm-pdf';
+      pdf.textContent = 'PDF';
+      div.appendChild(pdf);
+    } else {
+      const img = document.createElement('img');
+      img.src = f.urlVista;
+      img.alt = f.nombre;
+      div.appendChild(img);
+    }
+    const estado = document.createElement('div');
+    estado.className = 'cm-estado';
+    estado.textContent = { en_espera: 'En espera', subiendo: 'Enviando…', ok: '✓ Enviada', error: '↻ Reintentar' }[f.estado];
+    div.appendChild(estado);
+    if (f.estado === 'error') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cm-reintentar';
+      btn.setAttribute('aria-label', 'Reintentar enviar ' + f.nombre + (f.error ? ': ' + f.error : ''));
+      btn.title = f.error || '';
+      btn.addEventListener('click', () => { f.estado = 'en_espera'; f.error = ''; renderLista(); procesarCola(); });
+      div.appendChild(btn);
+    }
+    lista.appendChild(div);
+  });
+
+  const ok = fotos.filter((f) => f.estado === 'ok').length;
+  const pendientes = fotos.filter((f) => f.estado === 'en_espera' || f.estado === 'subiendo').length;
+  const errores = fotos.filter((f) => f.estado === 'error').length;
+  const resumen = document.getElementById('cmResumen');
+  resumen.hidden = fotos.length === 0;
+  const partes = [];
+  if (ok) partes.push(`<b>${ok} ${ok === 1 ? 'enviada' : 'enviadas'}</b>`);
+  if (pendientes) partes.push(`${pendientes} enviando`);
+  if (errores) partes.push(`${errores} con error`);
+  document.getElementById('cmResumenTexto').innerHTML = partes.join(' · ') +
+    (ok && !pendientes ? '<br>Ya se están leyendo en Enlaza -- revísalas en Carga masiva.' : '');
+}
+
+function archivoABase64(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(new Error('No se pudo leer la foto.'));
+    r.readAsDataURL(file);
+  });
+}
+
+function agregar(files){
+  [...files].forEach((file) => {
+    const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    fotos.push({
+      id: siguienteId++,
+      nombre: file.name || 'foto.jpg',
+      urlVista: esPdf ? '' : URL.createObjectURL(file),
+      esPdf,
+      estado: 'en_espera',
+      error: '',
+      archivo: file,
+    });
+  });
+  renderLista();
+  procesarCola();
+}
+
+// Una foto a la vez: con señal débil, varias subidas en paralelo se
+// estorban entre sí y fallan todas.
+async function procesarCola(){
+  if (subiendo) return;
+  const f = fotos.find((x) => x.estado === 'en_espera');
+  if (!f) return;
+  subiendo = true;
+  f.estado = 'subiendo';
+  renderLista();
+  try {
+    const archivo = f.esPdf ? f.archivo : await comprimirImagenSiHaceFalta(f.archivo);
+    const base64 = await archivoABase64(archivo);
+    const mediaType = f.esPdf ? 'application/pdf' : (archivo.type || 'image/jpeg');
+    const res = await fetch('/api/captura-movil-publica/fotos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Captura-Token': token },
+      body: JSON.stringify({ nombre: f.nombre, base64, mediaType }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 410) { mostrarInvalido(data.error || 'Este código QR ya no está disponible.'); return; }
+    if (!res.ok) throw new Error(data.error || 'No se pudo enviar.');
+    f.estado = 'ok';
+    f.archivo = null; // ya está en el servidor, no hace falta guardarla en memoria
+  } catch (err) {
+    f.estado = 'error';
+    f.error = err.message === 'Failed to fetch' ? 'Sin conexión' : err.message;
+  } finally {
+    subiendo = false;
+  }
+  renderLista();
+  procesarCola();
+}
+
+const inputFoto = document.getElementById('cmInputFoto');
+const inputGaleria = document.getElementById('cmInputGaleria');
+document.getElementById('cmBtnFoto').addEventListener('click', () => inputFoto.click());
+document.getElementById('cmBtnGaleria').addEventListener('click', () => inputGaleria.click());
+inputFoto.addEventListener('change', (e) => { agregar(e.target.files); inputFoto.value = ''; });
+inputGaleria.addEventListener('change', (e) => { agregar(e.target.files); inputGaleria.value = ''; });
+
+// Si se cierra con fotos sin enviar, se perderían: se avisa.
+window.addEventListener('beforeunload', (e) => {
+  if (fotos.some((f) => f.estado === 'en_espera' || f.estado === 'subiendo')) { e.preventDefault(); e.returnValue = ''; }
+});
+
+validar();
+</script>
+</body>
+</html>

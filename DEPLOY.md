@@ -39,6 +39,7 @@ Esto te da una URL pública (ej. `https://escaner-facturas.onrender.com`) que pu
 5. En la sección **Environment Variables**, agrega:
    - Key: `GEMINI_API_KEY` → Value: tu clave real de Gemini
    - Key: `DATABASE_URL` → Value: tu cadena de conexión de Supabase
+   - Key: `APP_URL` → Value: la dirección pública de tu app en Render (ej. `https://enlaza.onrender.com`). Es a donde lleva el código QR para tomar fotos desde el celular.
 6. Click en **Create Web Service**.
 
 > **Si ya tenías el servicio creado en Render** (de una versión anterior):

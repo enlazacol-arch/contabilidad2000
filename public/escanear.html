@@ -12,6 +12,7 @@
 <script src="/retenciones.js"></script>
 <script src="/puc-cliente.js"></script>
 <script src="/comprimir-imagen.js"></script>
+<script src="/qr-celular.js"></script>
 <script src="/motivo-sin-retencion.js"></script>
 <script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
@@ -1015,6 +1016,17 @@ async function loadTarifasIca(){
   }
 }
 
+// En un computador "Tomar foto" no sirve para una factura en papel: se
+// cambia por el código QR para fotografiarla con el celular (ver
+// /qr-celular.js). En celulares y tabletas todo queda igual.
+function montarQrCelular(){
+  if (!puedeEscribir(miRol) || !QrCelular.esComputador()) return;
+  document.getElementById('btnCamera').style.display = 'none';
+  const cont = document.createElement('div');
+  document.getElementById('intake').insertAdjacentElement('afterend', cont);
+  QrCelular.montar(cont, { clientes: myClients, clienteId: clientePreseleccionado ? clientePreseleccionado.id : '' });
+}
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -1038,6 +1050,7 @@ async function requireAuthAndInit(){
     aplicarPermisosUI();
     await loadMyClients();
     aplicarClientePreseleccionado();
+    montarQrCelular();
     loadTarifasAprendidas();
     loadSubcuentasAprendidas();
     loadTercerosFiscales();
