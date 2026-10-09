@@ -1843,11 +1843,27 @@ async function subirLote(files){
 // Consulta el estado del lote en el servidor y actualiza la pantalla.
 // La llama tanto el intervalo automático como cualquier acción que
 // necesite refrescar de inmediato (reintentar, eliminar).
+// Si el servidor falla un momento (ej. se cortó la conexión con la base),
+// antes la pantalla se quedaba sin mostrar el lote hasta recargar. Ahora
+// reintenta sola: a los 3, 6, 12... segundos, y avisa si no se recupera.
+let fallosLoteSeguidos = 0;
+let reintentoLoteHandle = null;
+function programarReintentoLote(motivo){
+  fallosLoteSeguidos++;
+  console.warn(`No se pudo cargar el lote (${motivo}) -- intento ${fallosLoteSeguidos}, se reintenta solo.`);
+  if (fallosLoteSeguidos === 3 && window.Aviso) {
+    Aviso.mostrar('No se pudo cargar el lote -- se sigue intentando solo. Si no aparece en un minuto, recarga la página.', { tipo: 'error' });
+  }
+  clearTimeout(reintentoLoteHandle);
+  reintentoLoteHandle = setTimeout(refrescarLoteActivo, Math.min(3000 * 2 ** (fallosLoteSeguidos - 1), 60000));
+}
+
 async function refrescarLoteActivo(){
   try {
     // Solo lo que ESTE usuario subió para ESTE cliente (o sin cliente fijo).
     const res = await fetch('/api/lotes/activo' + (clientePreseleccionado ? '?cliente=' + encodeURIComponent(clientePreseleccionado.id) : ''));
-    if (!res.ok) return;
+    if (!res.ok) { programarReintentoLote('HTTP ' + res.status); return; }
+    fallosLoteSeguidos = 0;
     const data = await res.json();
     if (!data) {
       // Nada pendiente para este cliente: no hay nada que seguir consultando.
@@ -1913,7 +1929,7 @@ async function refrescarLoteActivo(){
       pollingHandle = null;
     }
   } catch (err) {
-    console.warn('No se pudo actualizar el progreso del lote:', err.message);
+    programarReintentoLote(err.message);
   }
 }
 
