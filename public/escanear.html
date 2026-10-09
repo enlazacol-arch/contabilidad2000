@@ -2682,7 +2682,15 @@ function actualizarEstimadosRetencion(){
   const cliente = myClients.find(c => c.id === currentClienteId);
   const nitProveedor = nitInput ? nitInput.value : '';
   const perfilTercero = perfilFiscalDelNit(nitProveedor);
+  // Perfil fiscal del emisor tal como lo dijo la factura (prompt v4) --
+  // autorretenedor de ICA, gran contribuyente, nota de retención, etc.
+  const docPerfil = currentInvoiceData || {};
   const invParaCalculo = {
+    autorretenedor_ica: docPerfil.autorretenedor_ica, autorretenedor_ica_municipio: docPerfil.autorretenedor_ica_municipio,
+    gran_contribuyente: docPerfil.gran_contribuyente, agente_retencion_iva: docPerfil.agente_retencion_iva,
+    responsable_iva: docPerfil.responsable_iva, nota_retencion: docPerfil.nota_retencion,
+    nota_retencion_tarifa: docPerfil.nota_retencion_tarifa, nota_retencion_base: docPerfil.nota_retencion_base,
+    rete_fuente_documento: docPerfil.rete_fuente_documento,
     categoria_concepto: catSelect.value,
     valor_sin_iva: subtotalInput ? parseMoneyValue(subtotalInput.value) : 0,
     valor_iva: ivaInput ? parseMoneyValue(ivaInput.value) : 0,
@@ -2709,54 +2717,13 @@ function actualizarEstimadosRetencion(){
   // reales de esa categoría (según el PUC y la norma vigente) -- el
   // contador confirma o cambia la tarifa recomendada con un clic, en vez
   // de escribir el peso a ciegas.
+  // Rete Fuente: el menú se muestra SIEMPRE -- con la recomendada
+  // preseleccionada (o "Ninguno" si no aplica) y el porqué debajo,
+  // cruzando el perfil fiscal del proveedor y el de tu cliente.
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
-  if (typeof calcularRetencionSugerida === 'function') {
-    const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero, acumuladosCategoria);
-    const valorActual = parseMoneyValue(fuenteInput.value);
-    const categoriasEnDesglose = Object.keys(currentDesgloseCategorias || {});
-    const facturaEsUnaSolaCategoria = categoriasEnDesglose.length <= 1;
-    if (sugerido && sugerido.aplicaArticulo383) {
-      // Este proveedor está marcado en Terceros fiscales como sujeto al
-      // Art. 383 ET -- NUNCA se auto-aplica ni se sugiere la tarifa fija
-      // de honorarios/servicios acá (son regímenes excluyentes). Se deja
-      // el campo tal cual esté (nunca se pisa solo) y se avisa para que
-      // el contador calcule el 383 aparte.
-      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (rentas de trabajo), según el documento o su ficha de Terceros fiscales -- no corresponde la tarifa fija de honorarios/servicios. Calcula la retención por la tabla del 383 aparte (este sistema todavía no la automatiza) y escríbela directo en Rete Fuente.';
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && sugerido.requiereAiu) {
-      // NUNCA se aplica solo ni se muestra como "coincide" -- bajo/alto
-      // acá son un total PARCIAL (falta el AIU de al menos una
-      // categoría). Mostrarlo como si fuera el estimado final llevaría a
-      // retener de menos sin que el contador se diera cuenta.
-      const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_TEXTOS_RETENCION[f.categoria] || f.categoria).join(', ');
-      estFuenteEl.innerHTML = `⚠ Falta el AIU para calcular la retención (${escapeHtml(faltantes)}) -- ingrésalo en la columna AIU de "Ítems de la factura" abajo.`;
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && facturaEsUnaSolaCategoria && typeof renderSelectorTarifaFuente === 'function') {
-      renderSelectorTarifaFuente(estFuenteEl, catSelect.value, sugerido, fuenteInput, reteFuenteTocado);
-    } else if (sugerido && valorActual === 0 && !reteFuenteTocado) {
-      fuenteInput.value = sugerido.bajo.toLocaleString('es-CO');
-      estFuenteEl.innerHTML = `✓ Aplicado automáticamente: <b>$${sugerido.bajo.toLocaleString('es-CO')}</b> -- verifica y ajusta si no corresponde.`;
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && valorActual === sugerido.bajo) {
-      estFuenteEl.innerHTML = `✓ Coincide con el estimado calculado (<b>$${sugerido.bajo.toLocaleString('es-CO')}</b>).`;
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && valorActual === 0 && reteFuenteTocado) {
-      const texto = sugerido.mismaTarifa
-        ? `$${sugerido.bajo.toLocaleString('es-CO')}`
-        : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
-      estFuenteEl.innerHTML = `≈ Estimado: <b>${texto}</b>`;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = `Usar $${sugerido.bajo.toLocaleString('es-CO')}`;
-      btn.addEventListener('click', () => {
-        fuenteInput.value = sugerido.bajo.toLocaleString('es-CO');
-        fuenteInput.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-      estFuenteEl.appendChild(btn);
-      estFuenteEl.classList.add('show');
-    }
-  }
+  const explicacion = explicarRetenciones(invParaCalculo, cliente, tarifasAprendidas, perfilTercero, acumuladosCategoria);
+  renderPanelRetencionFuente(estFuenteEl, explicacion, fuenteInput, reteFuenteTocado);
 
   // Rete IVA -- misma lógica de aplicar-solo-una-vez que Rete Fuente.
   estIvaEl.classList.remove('show');
@@ -2785,6 +2752,12 @@ function actualizarEstimadosRetencion(){
     }
   }
 
+  const ivaPorque = document.createElement('div');
+  ivaPorque.className = 'fine';
+  ivaPorque.textContent = 'ReteIVA: ' + explicacion.iva.razon;
+  estIvaEl.appendChild(ivaPorque);
+  estIvaEl.classList.add('show');
+
   // Rete ICA -- varía por municipio y actividad, así que nunca se
   // adivina solo: el contador elige de SU PROPIA tabla de tarifas
   // (municipio + actividad + tarifa por mil + base) cuál aplica a esta
@@ -2801,6 +2774,14 @@ function actualizarEstimadosRetencion(){
   if (cliente && cliente.agente_retenedor_ica) {
     if (parseMoneyValue(icaInput.value) === 0) {
       renderEstimadoIca(estIcaEl, invParaCalculo);
+    }
+    // Después del selector de ICA (que limpia el contenedor al dibujarse).
+    if (explicacion.ica.razon) {
+      const icaAviso = document.createElement('div');
+      icaAviso.className = 'fine';
+      icaAviso.textContent = explicacion.ica.razon;
+      estIcaEl.appendChild(icaAviso);
+      estIcaEl.classList.add('show');
     }
   } else {
     estIcaEl.innerHTML = '<span class="fine">No aplica ICA -- este cliente no está configurado como agente retenedor de ICA (ver ficha del cliente).</span>';
@@ -3526,6 +3507,11 @@ function currentFieldValues(){
   out.cliente_id = currentClienteId || '';
   out.regimen_simple = currentRegimenSimple;
   out.autorretenedor = currentAutorretenedor;
+  // Perfil fiscal del emisor según la factura (prompt v4) -- se guarda
+  // para poder volver a explicar la retención en Revisión/Facturas.
+  for (const campo of ['autorretenedor_ica', 'autorretenedor_ica_municipio', 'gran_contribuyente', 'agente_retencion_iva', 'responsable_iva', 'nota_retencion', 'nota_retencion_tarifa', 'nota_retencion_base']) {
+    out[campo] = currentInvoiceData && currentInvoiceData[campo] !== undefined ? currentInvoiceData[campo] : '';
+  }
   out.solicita_articulo_383 = !!(currentInvoiceData && (currentInvoiceData.solicita_articulo_383 === true || currentInvoiceData.solicita_articulo_383 === 'true'));
   // Se guardan tal cual los detectó la IA -- son solo avisos informativos
   // (ver banner arriba), no cambian ningún cálculo, pero conviene que

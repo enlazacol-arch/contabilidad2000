@@ -1265,56 +1265,23 @@ function actualizarEstimadosRetencionMasivo(){
 
   const cliente = myClients.find(c => c.id === itemAbierto.clienteId);
 
+  // Rete Fuente: el menú se muestra SIEMPRE, con la recomendada y el
+  // porqué (perfil fiscal del proveedor + el de tu cliente) -- mismo
+  // panel que Escanear (ver renderPanelRetencionFuente en retenciones.js).
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
-  if (typeof calcularRetencionSugerida === 'function') {
-    const categoriasEnDesglose = Object.keys(d.desglose_categorias || {});
-    const facturaEsUnaSolaCategoria = categoriasEnDesglose.length <= 1;
-    const categoriasParaAcumulado = categoriasEnDesglose.length > 0 ? categoriasEnDesglose : [d.categoria_concepto];
-    const acumuladosCategoria = acumuladosParaFacturaMasivo(d.nit_cc, categoriasParaAcumulado, d.fecha_factura);
-    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc), acumuladosCategoria);
-    if (sugerido && sugerido.aplicaArticulo383) {
-      // Igual que en Escanear -- nunca se auto-aplica ni se sugiere la
-      // tarifa fija de honorarios/servicios para un proveedor marcado
-      // con el Art. 383 (regímenes excluyentes, Concepto DIAN 752/2023).
-      estFuenteEl.innerHTML = '⚠ Este proveedor aplica Art. 383 ET (lo dice el documento o la ficha de Terceros fiscales) -- no corresponde la tarifa fija de honorarios/servicios. Calcula el 383 aparte y escríbelo directo en Rete Fuente.';
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && sugerido.requiereAiu) {
-      // Nunca se ofrece un botón "Usar" acá -- bajo/alto son un total
-      // PARCIAL mientras falte el AIU de alguna categoría.
-      const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_LABELS[f.categoria] || f.categoria).join(', ');
-      estFuenteEl.innerHTML = `⚠ Falta el AIU de ${escapeHtml(faltantes)} para calcular la retención -- ingrésalo abajo en "Ítems de la factura".`;
-      estFuenteEl.classList.add('show');
-    } else if (sugerido && facturaEsUnaSolaCategoria && typeof renderSelectorTarifaFuente === 'function') {
-      // Factura de una sola categoría -- selector con las tarifas legales
-      // reales (según el PUC / la norma vigente) en vez de solo un texto
-      // "≈ rango" -- mismo criterio y misma tabla que usa Escanear.
-      // El 5to argumento ("tocado") le dice a renderSelectorTarifaFuente
-      // si el contador ya editó Rete Fuente a mano en ESTE item -- antes
-      // acá siempre se mandaba `false`, así que un valor que el contador
-      // había escrito a propósito (incluyendo "Ninguno" = $0) se trataba
-      // siempre como si viniera de un cálculo automático viejo, y podía
-      // reemplazarse solo con el nuevo estimado sin que el contador lo
-      // pidiera. `itemAbierto.reteFuenteTocado` (ver el listener de
-      // input más abajo) es el mismo criterio que ya usa Escanear con su
-      // variable global `reteFuenteTocado`, aplicado por item.
-      renderSelectorTarifaFuente(estFuenteEl, d.categoria_concepto, sugerido, fuenteInput, !!itemAbierto.reteFuenteTocado);
-      // El selector puede dejar puesta sola la tarifa recomendada en el
-      // campo -- antes solo cambiaba lo que se VEÍA, no item.data, y la
-      // factura se guardaba con la Rete Fuente anterior (casi siempre $0).
-      // Lo que se ve es lo que se guarda.
-      const fuenteVisible = parseMoneyValue(fuenteInput.value);
-      if (fuenteVisible !== (Number(d.rete_fuente) || 0)) {
-        d.rete_fuente = fuenteVisible;
-        guardarEdicionItem(itemAbierto);
-      }
-    } else if (sugerido && parseMoneyValue(fuenteInput.value) === 0) {
-      const texto = sugerido.mismaTarifa
-        ? `$${sugerido.bajo.toLocaleString('es-CO')}`
-        : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
-      estFuenteEl.innerHTML = `≈ Estimado: <b>${texto}</b> <button type="button" data-usar-rete="rete_fuente" data-valor="${sugerido.bajo}">Usar $${sugerido.bajo.toLocaleString('es-CO')}</button>`;
-      estFuenteEl.classList.add('show');
-    }
+  const categoriasEnDesglose = Object.keys(d.desglose_categorias || {});
+  const categoriasParaAcumulado = categoriasEnDesglose.length > 0 ? categoriasEnDesglose : [d.categoria_concepto];
+  const acumuladosCategoria = acumuladosParaFacturaMasivo(d.nit_cc, categoriasParaAcumulado, d.fecha_factura);
+  const explicacion = explicarRetenciones(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc), acumuladosCategoria);
+  renderPanelRetencionFuente(estFuenteEl, explicacion, fuenteInput, !!itemAbierto.reteFuenteTocado);
+  // El panel puede dejar puesta sola la recomendada en el campo -- antes
+  // solo cambiaba lo que se VEÍA, no item.data, y la factura se guardaba
+  // con la Rete Fuente anterior. Lo que se ve es lo que se guarda.
+  const fuenteVisible = parseMoneyValue(fuenteInput.value);
+  if (fuenteVisible !== (Number(d.rete_fuente) || 0)) {
+    d.rete_fuente = fuenteVisible;
+    guardarEdicionItem(itemAbierto);
   }
   agregarAvisoUvtRespaldoSiAplica(estFuenteEl, d.fecha_factura);
 
@@ -1329,6 +1296,12 @@ function actualizarEstimadosRetencionMasivo(){
     }
   }
 
+  const ivaPorque = document.createElement('div');
+  ivaPorque.className = 'fine';
+  ivaPorque.textContent = 'ReteIVA: ' + explicacion.iva.razon;
+  estIvaEl.appendChild(ivaPorque);
+  estIvaEl.classList.add('show');
+
   // A diferencia de Rete Fuente (que usa "agente_retenedor", derivado de
   // las responsabilidades del RUT), ICA es municipal y se marca aparte
   // en la ficha del cliente ("agente_retenedor_ica") -- si no está
@@ -1339,6 +1312,14 @@ function actualizarEstimadosRetencionMasivo(){
   if (cliente && cliente.agente_retenedor_ica) {
     if (parseMoneyValue(icaInput.value) === 0) {
       renderEstimadoIcaMasivo(estIcaEl, d, icaInput);
+    }
+    // Después del selector de ICA (que limpia el contenedor al dibujarse).
+    if (explicacion.ica.razon) {
+      const icaAviso = document.createElement('div');
+      icaAviso.className = 'fine';
+      icaAviso.textContent = explicacion.ica.razon;
+      estIcaEl.appendChild(icaAviso);
+      estIcaEl.classList.add('show');
     }
   } else {
     estIcaEl.innerHTML = '<span class="fine">No aplica ICA -- este cliente no está configurado como agente retenedor de ICA (ver ficha del cliente).</span>';
@@ -2296,6 +2277,15 @@ function construirPayloadFactura(item){
     regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
     solicita_articulo_383: d.solicita_articulo_383 === true || d.solicita_articulo_383 === 'true',
     autorretenedor: d.autorretenedor === true || d.autorretenedor === 'true',
+    // Perfil fiscal del emisor según la factura (prompt v4).
+    autorretenedor_ica: d.autorretenedor_ica === true || d.autorretenedor_ica === 'true',
+    autorretenedor_ica_municipio: d.autorretenedor_ica_municipio || '',
+    gran_contribuyente: d.gran_contribuyente === true || d.gran_contribuyente === 'true',
+    agente_retencion_iva: d.agente_retencion_iva === true || d.agente_retencion_iva === 'true',
+    responsable_iva: d.responsable_iva || '',
+    nota_retencion: d.nota_retencion || '',
+    nota_retencion_tarifa: String(d.nota_retencion_tarifa || ''),
+    nota_retencion_base: d.nota_retencion_base || '',
     desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
     desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),
     subcuenta_gasto: d.subcuenta_gasto || '',

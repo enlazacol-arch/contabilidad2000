@@ -457,7 +457,80 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
   const aplicaArticulo383 = !!(perfilTercero && perfilTercero.aplica_articulo_383) ||
     inv.solicita_articulo_383 === true || inv.solicita_articulo_383 === 'true' ||
     NITS_ARTICULO_383.has(String(inv.nit_cc || '').replace(/-\s*\d$/, '').replace(/[^0-9]/g, ''));
-  return { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener };
+  const enDoc = (campo) => inv[campo] === true || inv[campo] === 'true';
+  const enFicha = (campo) => !!(perfilTercero && perfilTercero[campo]);
+  // De dónde salió cada dato del perfil -- para explicarle al contador
+  // por qué se recomendó (o no) una retención: 'ficha' (Terceros
+  // fiscales), 'documento' (lo dice la factura) o 'nit' (persona jurídica).
+  const origen = (campoFicha, campoDoc) => (enFicha(campoFicha) ? 'ficha' : (enDoc(campoDoc) ? 'documento' : null));
+  // Lo que dice la factura sobre el emisor (prompt v4). La ficha de
+  // Terceros fiscales manda cuando lo marca; si no, vale el documento.
+  const autorretenedorIca = enDoc('autorretenedor_ica');
+  const granContribuyente = enFicha('gran_contribuyente') || enDoc('gran_contribuyente');
+  const agenteRetencionIva = enFicha('agente_retencion_iva') || enDoc('agente_retencion_iva');
+  const noResponsableIva = String(inv.responsable_iva || '').toLowerCase() === 'no';
+  return {
+    regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener,
+    autorretenedorIca, granContribuyente, agenteRetencionIva, noResponsableIva,
+    origen: {
+      regimenSimple: origen('regimen_simple', 'regimen_simple'),
+      autorretenedor: origen('autorretenedor', 'autorretenedor'),
+      granContribuyente: origen('gran_contribuyente', 'gran_contribuyente'),
+      agenteRetencionIva: origen('agente_retencion_iva', 'agente_retencion_iva'),
+      declaranteRenta: enFicha('declarante_renta') ? 'ficha' : (esNitPersonaJuridica(inv.nit_cc) ? 'nit' : null),
+      aplicaArticulo383: enFicha('aplica_articulo_383') ? 'ficha' : (enDoc('solicita_articulo_383') ? 'documento' : (aplicaArticulo383 ? 'historial' : null)),
+      noRetener: noRetener ? 'ficha' : null,
+    },
+  };
+}
+
+// ---------- Perfil fiscal que trae el propio documento (prompt v4) ----------
+// Deja en forma fija lo que devolvió la IA sobre el emisor: booleanos de
+// verdad, 'si'/'no'/'' para IVA, la nota de retención como texto, su
+// tarifa como número (2 = 2%) y su base ('aiu'/'subtotal'/''). Lo usa
+// el servidor apenas lee una factura. Muta y devuelve el objeto.
+function normalizarPerfilFiscalDocumento(datos) {
+  if (!datos || typeof datos !== 'object') return datos;
+  const bool = (v) => v === true || v === 'true' || v === 1 || v === '1';
+  for (const campo of ['autorretenedor', 'autorretenedor_ica', 'gran_contribuyente', 'agente_retencion_iva', 'regimen_simple']) {
+    datos[campo] = bool(datos[campo]);
+  }
+  const resp = String(datos.responsable_iva || '').trim().toLowerCase();
+  datos.responsable_iva = ['si', 'sí', 'true'].includes(resp) ? 'si' : (['no', 'false'].includes(resp) ? 'no' : '');
+  datos.autorretenedor_ica_municipio = datos.autorretenedor_ica ? String(datos.autorretenedor_ica_municipio || '').trim().slice(0, 80) : '';
+  datos.nota_retencion = String(datos.nota_retencion || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  const tarifa = Number(String(datos.nota_retencion_tarifa == null ? '' : datos.nota_retencion_tarifa).replace('%', '').replace(',', '.'));
+  datos.nota_retencion_tarifa = datos.nota_retencion && tarifa > 0 && tarifa <= 20 ? tarifa : 0;
+  const base = String(datos.nota_retencion_base || '').trim().toLowerCase();
+  datos.nota_retencion_base = datos.nota_retencion && ['aiu', 'subtotal'].includes(base) ? base : '';
+  // Lo que traía impreso el documento en Rete Fuente, antes de que nadie
+  // lo toque -- el selector lo ofrece como opción aparte.
+  if (datos.rete_fuente_documento === undefined) datos.rete_fuente_documento = Number(datos.rete_fuente) || 0;
+  return datos;
+}
+
+// La tarifa que indica el proveedor en su nota ("Retención 2% ..."), como
+// fracción, SOLO si es una de las tarifas legales de esa categoría -- si
+// la nota dice otra cosa, no se usa para recomendar (se muestra igual).
+function tarifaNotaDocumento(inv, categoria) {
+  const pct = Number(inv && inv.nota_retencion_tarifa) || 0;
+  const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
+  if (!pct || !config) return null;
+  const frac = Math.round(pct * 1000) / 100000;
+  return [config.tarifaBaja, config.tarifaAlta].some((t) => Math.abs(t - frac) < 1e-9) ? frac : null;
+}
+
+// tarifasAprendidas + la tarifa de la nota del documento, para las
+// categorías de esta factura que todavía no tienen una aprendida (la
+// aprendida -- confirmada antes por el contador -- sigue mandando).
+function tarifasConNotaDocumento(inv, categorias, tarifasAprendidas) {
+  const salida = { ...(tarifasAprendidas || {}) };
+  (categorias || []).forEach((categoria) => {
+    const clave = `${inv.nit_cc || ''}|${String(categoria || '').toLowerCase()}`;
+    const deNota = tarifaNotaDocumento(inv, categoria);
+    if (deNota !== null && salida[clave] === undefined) salida[clave] = deNota;
+  });
+  return salida;
 }
 
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
@@ -655,7 +728,6 @@ function montoCategoriaEnFactura(inv, categoria) {
 // {} o nada si no lo tienes cargado -- esas categorías simplemente
 // devuelven el rango bajo-alto en vez de resolver la tarifa sola.
 function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero, acumulados){
-  tarifasAprendidas = tarifasAprendidas || {};
   acumulados = acumulados || {};
   if (!cliente || !cliente.agente_retenedor) return null; // nunca le corresponde retener
 
@@ -683,6 +755,8 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     const parsedAiu = typeof rawAiu === 'string' ? JSON.parse(rawAiu || '{}') : (rawAiu || {});
     if (parsedAiu && typeof parsedAiu === 'object' && !Array.isArray(parsedAiu)) desgloseAiu = parsedAiu;
   } catch (e) { desgloseAiu = {}; }
+
+  tarifasAprendidas = tarifasConNotaDocumento(inv, desglose ? Object.keys(desglose) : [inv.categoria_concepto], tarifasAprendidas);
 
   if (desglose) {
     let bajoTotal = 0, altoTotal = 0, huboAlguno = false, mismaTarifaEnTodas = true;
@@ -826,6 +900,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   if (!cliente || !cliente.agente_retenedor) return null;
   if (!Array.isArray(items) || items.length === 0) return null;
   acumulados = acumulados || {};
+  tarifasAprendidas = tarifasConNotaDocumento(inv, items.map((it) => it.categoria_concepto), tarifasAprendidas);
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple || perfil.autorretenedor || perfil.noRetener) {
@@ -1410,7 +1485,11 @@ const RETEIVA_TARIFA_GENERAL = 0.15;
 function calcularReteIvaSugerido(inv, cliente, perfilTercero){
   if (!cliente || !cliente.agente_retenedor_iva) return null;
 
-  if (perfilTercero && (perfilTercero.agente_retencion_iva || perfilTercero.gran_contribuyente)) return null;
+  // Gran contribuyente / agente de retención de IVA: de su ficha de
+  // Terceros fiscales o, si no está marcado ahí, de lo que dice la factura.
+  const perfil = perfilFiscalEfectivo(inv, perfilTercero);
+  if (perfil.agenteRetencionIva || perfil.granContribuyente) return null;
+  if (perfil.noResponsableIva) return null;
 
   const ivaValor = Number(inv.valor_iva) || 0;
   if (ivaValor <= 0) return null; // sin IVA, no hay nada que retener
@@ -1445,6 +1524,19 @@ function calcularReteIvaSugerido(inv, cliente, perfilTercero){
 // cuenta_puc }. Si no ha elegido ninguna (porque no la ha configurado
 // todavía), esta función no calcula nada -- nunca asume un municipio
 // ni una tarifa por su cuenta.
+// ¿El emisor dice ser autorretenedor de ICA en el municipio de esta
+// tarifa? Si la factura no dice el municipio, se asume que sí.
+function textoMunicipio(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function proveedorAutorretenedorIcaEn(inv, tarifaIca) {
+  if (!(inv && (inv.autorretenedor_ica === true || inv.autorretenedor_ica === 'true'))) return false;
+  const municipioDoc = textoMunicipio(inv.autorretenedor_ica_municipio);
+  if (!municipioDoc || !tarifaIca) return true;
+  const municipioTarifa = textoMunicipio(tarifaIca.municipio);
+  return !municipioTarifa || municipioTarifa.includes(municipioDoc) || municipioDoc.includes(municipioTarifa);
+}
+
 function calcularReteIcaSugerido(inv, tarifaIca, cliente){
   if (!tarifaIca) return null; // el contador no ha elegido/configurado una tarifa de ICA para este municipio todavía
   // Defensa adicional: si quien llama SÍ pasó el cliente, esta función no
@@ -1453,6 +1545,7 @@ function calcularReteIcaSugerido(inv, tarifaIca, cliente){
   // se pasa cliente (compatibilidad con el único caller actual, que ya
   // valida esto antes de llamar), el comportamiento no cambia.
   if (cliente && !cliente.agente_retenedor_ica) return null;
+  if (proveedorAutorretenedorIcaEn(inv, tarifaIca)) return null;
 
   const tarifaPorMil = Number(tarifaIca.tarifa_por_mil);
   if (!tarifaPorMil || tarifaPorMil <= 0) return null;
@@ -1467,6 +1560,277 @@ function calcularReteIcaSugerido(inv, tarifaIca, cliente){
     cuentaPUC: tarifaIca.cuenta_puc || CUENTAS_PUC_FIJAS.rete_ica.cuentaPUC,
     nombrePUC: tarifaIca.cuenta_puc ? `ICA retenido -- ${tarifaIca.municipio}` : CUENTAS_PUC_FIJAS.rete_ica.nombrePUC,
   };
+}
+
+// ---------- Por qué se recomienda (o no) cada retención ----------
+//
+// Misma lógica y mismo orden que calcularRetencionSugerida() /
+// calcularReteIvaSugerido(), pero en vez de solo el monto devuelve las
+// razones en palabras, más el perfil fiscal del proveedor (lo que dice
+// la factura + su ficha de Terceros fiscales) y el de tu cliente -- para
+// mostrarlas siempre junto al menú de Rete Fuente.
+const TEXTO_ORIGEN_PERFIL = { ficha: 'según su ficha de Terceros fiscales', documento: 'según la factura', nit: 'por su NIT de persona jurídica', historial: 'según su historial' };
+function pesosTexto(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-CO'); }
+function etiquetaCategoria(categoria) {
+  const k = String(categoria || '').toLowerCase();
+  return (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined' && CATEGORIA_CONCEPTO_LABELS[k]) || k || 'sin categoría';
+}
+
+function explicarRetenciones(inv, cliente, tarifasAprendidas, perfilTercero, acumulados) {
+  inv = inv || {};
+  acumulados = acumulados || {};
+  const perfil = perfilFiscalEfectivo(inv, perfilTercero);
+  const de = (clave) => (perfil.origen[clave] ? ` (${TEXTO_ORIGEN_PERFIL[perfil.origen[clave]]})` : '');
+
+  // --- Perfil del proveedor
+  const perfilProveedor = [];
+  if (perfil.declaranteRenta) perfilProveedor.push(`Declara renta${de('declaranteRenta')}`);
+  else perfilProveedor.push('Persona natural: no se sabe si declara renta');
+  if (perfil.regimenSimple) perfilProveedor.push(`Régimen Simple de Tributación${de('regimenSimple')}`);
+  if (perfil.autorretenedor) perfilProveedor.push(`Autorretenedor de renta${de('autorretenedor')}`);
+  if (perfil.autorretenedorIca) perfilProveedor.push(`Autorretenedor de ICA${inv.autorretenedor_ica_municipio ? ' en ' + inv.autorretenedor_ica_municipio : ''} (según la factura)`);
+  if (perfil.granContribuyente) perfilProveedor.push(`Gran contribuyente${de('granContribuyente')}`);
+  if (perfil.agenteRetencionIva) perfilProveedor.push(`Agente de retención de IVA${de('agenteRetencionIva')}`);
+  if (perfil.noResponsableIva) perfilProveedor.push('No responsable de IVA (según la factura)');
+  else if (String(inv.responsable_iva || '') === 'si') perfilProveedor.push('Responsable de IVA (según la factura)');
+  if (perfil.aplicaArticulo383) perfilProveedor.push(`Aplica Art. 383 ET${de('aplicaArticulo383')}`);
+  if (perfil.noRetener) perfilProveedor.push('Marcado: no se le retiene');
+
+  // --- Perfil de tu cliente
+  const perfilCliente = cliente ? [
+    `Agente retenedor de renta: ${cliente.agente_retenedor ? 'sí' : 'no'}`,
+    `de IVA: ${cliente.agente_retenedor_iva ? 'sí' : 'no'}`,
+    `de ICA: ${cliente.agente_retenedor_ica ? 'sí' : 'no'}`,
+  ] : [];
+
+  // --- Rete Fuente
+  const razones = [];
+  let sugerido = null;
+  let aplica = false;
+  const nota = String(inv.nota_retencion || '').trim();
+  let categoriasUsadas = [];
+  if (!cliente) {
+    razones.push('Todavía no se sabe de cuál de tus clientes es la factura: elige el cliente para saber si le corresponde retener.');
+  } else if (!cliente.agente_retenedor) {
+    razones.push(`Tu cliente ${cliente.nombre || ''} no es agente retenedor de renta (no tiene la responsabilidad 07 en su RUT): no le corresponde practicar retención en la fuente.`);
+  } else if (perfil.regimenSimple) {
+    razones.push(`El proveedor es del Régimen Simple de Tributación${de('regimenSimple')}: no se le practica retención en la fuente.`);
+  } else if (perfil.autorretenedor) {
+    razones.push(`El proveedor es autorretenedor de renta${de('autorretenedor')}: él mismo se practica la retención, tu cliente no la descuenta.`);
+  } else if (perfil.noRetener) {
+    razones.push('A este proveedor no se le retiene (marcado en Terceros fiscales o aprendido de la contabilidad anterior del cliente).');
+  } else {
+    sugerido = calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero, acumulados);
+    const tarifasEf = tarifasConNotaDocumento(inv, [], tarifasAprendidas);
+    let desglose = null;
+    try {
+      const raw = inv.desglose_categorias;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) desglose = parsed;
+    } catch (e) { desglose = null; }
+    let desgloseAiu = {};
+    try {
+      const rawAiu = inv.desglose_aiu;
+      desgloseAiu = (typeof rawAiu === 'string' ? JSON.parse(rawAiu || '{}') : (rawAiu || {})) || {};
+    } catch (e) { desgloseAiu = {}; }
+    const partes = desglose ? Object.entries(desglose) : [[inv.categoria_concepto, inv.valor_sin_iva]];
+    categoriasUsadas = partes.map(([c]) => String(c || '').toLowerCase());
+    const anio = anioDeFechaFactura(inv.fecha_factura);
+    partes.forEach(([categoria, monto]) => {
+      const k = String(categoria || '').toLowerCase();
+      const etiqueta = etiquetaCategoria(k);
+      const config = TARIFAS_RETENCION[k];
+      if (!config) {
+        razones.push(`${etiqueta}: esta categoría no tiene una tarifa de retención definida -- elige la categoría correcta o escribe el valor a mano.`);
+        return;
+      }
+      const umbral = umbralPesos(config, inv.fecha_factura);
+      const uvt = Math.round(umbral / valorUvt(anio));
+      if ((Number(monto) || 0) < umbral) {
+        razones.push(`${etiqueta}: ${pesosTexto(monto)} no supera la base mínima de ${uvt} UVT (${pesosTexto(umbral)}) -- no aplica retención.`);
+        return;
+      }
+      const aiuParte = desglose ? desgloseAiu[k] : inv.valor_aiu;
+      const aiuLinea = desglose ? (desgloseAiu._aiu_en_linea_propia || {})[k] : undefined;
+      const r = calcularRetencionCategoriaLinea(k, monto, inv.nit_cc || '', inv.fecha_factura, tarifasEf, aiuParte, perfil.declaranteRenta, acumulados[k], perfil.aplicaArticulo383, aiuLinea);
+      if (!r) return;
+      if (r.aplicaArticulo383) {
+        razones.push(`${etiqueta}: el proveedor aplica el Art. 383 ET${de('aplicaArticulo383')} -- la retención se calcula con la tabla de rentas de trabajo, no con la tarifa fija; escríbela a mano.`);
+        return;
+      }
+      if (r.requiereAiu) {
+        razones.push(`${etiqueta}: la retención es sobre el AIU, y la factura no lo trae -- escríbelo en "Ítems de la factura" (mínimo el 10% del servicio: ${pesosTexto(r.aiuMinimoPresuntivo)}).`);
+        return;
+      }
+      const pct = formatearPorcentajeTarifa(r.tarifaAplicada !== undefined ? r.tarifaAplicada : config.tarifaBaja);
+      const base = r.baseUsada !== undefined
+        ? `sobre el AIU de ${pesosTexto(r.baseUsada)}${r.aiuAjustadoAlPiso ? ` (el mínimo del 10% del servicio, porque el AIU de la factura, ${pesosTexto(r.aiuUsado)}, es menor)` : ''}`
+        : `sobre ${pesosTexto(monto)} (valor antes de IVA)`;
+      const claveNit = `${inv.nit_cc || ''}|${k}`;
+      let porque;
+      if (tarifasAprendidas && tarifasAprendidas[claveNit] !== undefined) porque = 'es la tarifa que ya confirmaste antes para este proveedor';
+      else if (tarifaNotaDocumento(inv, k) !== null) porque = 'lo indica el proveedor en la factura';
+      else if (r.criterioTarifa === 'acumulado_anual') porque = `lo pagado a este proveedor en el año (${pesosTexto(r.acumuladoConEstePago)}) ${r.acumuladoConEstePago > r.umbralAcumuladoPesos ? 'supera' : 'no supera'} 3.300 UVT`;
+      else if (config.tarifaBaja === config.tarifaAlta) porque = `es la tarifa de ${etiqueta.toLowerCase()}`;
+      else if (r.mismaTarifa) porque = `el proveedor declara renta${de('declaranteRenta')}`;
+      else porque = `no se sabe si el proveedor declara renta: ${formatearPorcentajeTarifa(config.tarifaBaja)} si declara, ${formatearPorcentajeTarifa(config.tarifaAlta)} si no -- se preselecciona la de declarante (márcalo en Terceros fiscales para no tener que elegir)`;
+      const rango = r.mismaTarifa ? pesosTexto(r.bajo) : `${pesosTexto(r.bajo)} – ${pesosTexto(r.alto)}`;
+      razones.push(`${etiqueta}: ${pct} ${base} = ${rango}. Por qué ${pct}: ${porque}. Supera la base mínima de ${uvt} UVT (${pesosTexto(umbral)}).`);
+    });
+    aplica = !!(sugerido && !sugerido.requiereAiu && !sugerido.aplicaArticulo383 && sugerido.bajo > 0);
+  }
+  if (nota) {
+    const usable = categoriasUsadas.some((c) => tarifaNotaDocumento(inv, c) !== null);
+    razones.push(`La factura dice: «${nota}»${Number(inv.nota_retencion_tarifa) > 0 && !usable ? ` -- ese ${inv.nota_retencion_tarifa}% no es una tarifa de la categoría elegida; revisa la categoría` : ''}.`);
+  }
+  const docFuente = Number(inv.rete_fuente_documento) || 0;
+  if (docFuente > 0) razones.push(`La factura trae impresa una Rete Fuente de ${pesosTexto(docFuente)}.`);
+
+  // Tarifas de la categoría para retener a mano aunque no se recomiende
+  // (ej. el contador sabe algo que la factura no dice).
+  const opcionesManuales = [];
+  const catUnica = categoriasUsadas.length === 1 ? categoriasUsadas[0] : (categoriasUsadas.length === 0 ? String(inv.categoria_concepto || '').toLowerCase() : null);
+  if (!aplica && catUnica && TARIFAS_RETENCION[catUnica]) {
+    const config = TARIFAS_RETENCION[catUnica];
+    let aiuManual = Number(inv.valor_aiu) || 0;
+    try {
+      const rawAiu = inv.desglose_aiu;
+      const d = (typeof rawAiu === 'string' ? JSON.parse(rawAiu || '{}') : (rawAiu || {})) || {};
+      if (Number(d[catUnica]) > 0) aiuManual = Number(d[catUnica]);
+    } catch (e) { /* sin AIU */ }
+    // En vigilancia/aseo y temporales la base es el AIU: sin él no hay
+    // una cifra honesta que ofrecer.
+    const base = config.baseEspecial === 'aiu' ? aiuManual : (Number(inv.valor_sin_iva) || 0);
+    const queBase = config.baseEspecial === 'aiu' ? 'el AIU de ' : '';
+    [...new Set([config.tarifaBaja, config.tarifaAlta])].forEach((t) => {
+      if (base > 0) opcionesManuales.push({ valor: Math.round(base * t), label: `Retener de todas formas: ${formatearPorcentajeTarifa(t)} sobre ${queBase}${pesosTexto(base)} — ${pesosTexto(base * t)}` });
+    });
+  }
+
+  // --- ReteIVA
+  let ivaMonto = null;
+  let ivaRazon;
+  const ivaValor = Number(inv.valor_iva) || 0;
+  if (!cliente) ivaRazon = 'Elige el cliente para saber si aplica ReteIVA.';
+  else if (!cliente.agente_retenedor_iva) ivaRazon = `Tu cliente no es agente de retención de IVA (si lo es, márcalo en su ficha): no aplica ReteIVA.`;
+  else if (perfil.granContribuyente || perfil.agenteRetencionIva) ivaRazon = `El proveedor es ${perfil.granContribuyente ? 'gran contribuyente' + de('granContribuyente') : 'agente de retención de IVA' + de('agenteRetencionIva')}: entre agentes de retención no se practica ReteIVA.`;
+  else if (perfil.noResponsableIva) ivaRazon = 'El proveedor no es responsable de IVA (según la factura): no hay IVA que retener.';
+  else if (ivaValor <= 0) ivaRazon = 'La factura no tiene IVA: no hay nada que retener.';
+  else {
+    ivaMonto = calcularReteIvaSugerido(inv, cliente, perfilTercero);
+    ivaRazon = ivaMonto
+      ? `15% del IVA (${pesosTexto(ivaValor)}) = ${pesosTexto(ivaMonto)}: tu cliente es agente de retención de IVA y el proveedor no es gran contribuyente ni agente de retención de IVA.`
+      : 'El valor no supera la base mínima de la categoría (o la categoría no tiene tarifa): no aplica ReteIVA.';
+  }
+
+  // --- ReteICA
+  const icaRazon = perfil.autorretenedorIca
+    ? `El proveedor es autorretenedor de ICA${inv.autorretenedor_ica_municipio ? ' en ' + inv.autorretenedor_ica_municipio : ''} (según la factura): ahí no se le practica ReteICA.`
+    : null;
+
+  return {
+    fuente: { aplica, recomendado: aplica ? sugerido.bajo : 0, sugerido, razones, opcionesManuales, categoriaUnica: catUnica, valorDocumento: docFuente },
+    iva: { monto: ivaMonto, razon: ivaRazon },
+    ica: { razon: icaRazon },
+    perfilProveedor,
+    perfilCliente,
+  };
+}
+
+// Opciones del menú de Rete Fuente a partir de un resultado de
+// calcularRetencionSugerida() (factura de una sola categoría o varias).
+function opcionesRetencionFuente(categoria, sugerido) {
+  const configCategoria = TARIFAS_RETENCION[String(categoria || '').toLowerCase()] || null;
+  const opciones = [];
+  if (!sugerido || sugerido.requiereAiu || sugerido.aplicaArticulo383 || !(sugerido.bajo > 0)) return opciones;
+  if (!configCategoria) {
+    opciones.push({ valor: sugerido.bajo, label: `Por categorías — $${sugerido.bajo.toLocaleString('es-CO')}` });
+    if (!sugerido.mismaTarifa && sugerido.alto !== sugerido.bajo) opciones.push({ valor: sugerido.alto, label: `Por categorías (no declarante) — $${sugerido.alto.toLocaleString('es-CO')}` });
+    return opciones;
+  }
+  const esAcumulado = configCategoria.criterioTarifa === 'acumulado_anual';
+  if (sugerido.mismaTarifa) {
+    const pctResuelto = (typeof sugerido.tarifaAplicada === 'number') ? sugerido.tarifaAplicada : configCategoria.tarifaBaja;
+    let sufijo = '';
+    if (esAcumulado && sugerido.criterioTarifa === 'acumulado_anual') {
+      sufijo = ` (acumulado ${sugerido.acumuladoConEstePago.toLocaleString('es-CO')} de ${sugerido.umbralAcumuladoPesos.toLocaleString('es-CO')} en el año)`;
+    }
+    opciones.push({ valor: sugerido.bajo, label: `${formatearPorcentajeTarifa(pctResuelto)} — $${sugerido.bajo.toLocaleString('es-CO')}${sufijo}` });
+  } else if (esAcumulado) {
+    opciones.push({ valor: sugerido.bajo, label: `${formatearPorcentajeTarifa(configCategoria.tarifaBaja)} (pagos del año a este proveedor ≤ 3.300 UVT) — $${sugerido.bajo.toLocaleString('es-CO')}` });
+    opciones.push({ valor: sugerido.alto, label: `${formatearPorcentajeTarifa(configCategoria.tarifaAlta)} (pagos del año a este proveedor > 3.300 UVT) — $${sugerido.alto.toLocaleString('es-CO')}` });
+  } else {
+    opciones.push({ valor: sugerido.bajo, label: `${formatearPorcentajeTarifa(configCategoria.tarifaBaja)} (declarante de renta) — $${sugerido.bajo.toLocaleString('es-CO')}` });
+    opciones.push({ valor: sugerido.alto, label: `${formatearPorcentajeTarifa(configCategoria.tarifaAlta)} (no declarante / no se sabe) — $${sugerido.alto.toLocaleString('es-CO')}` });
+  }
+  return opciones;
+}
+
+// Menú de Rete Fuente -- SIEMPRE visible, también cuando no aplica
+// retención (entonces la recomendada es "Ninguno" y se explica por qué),
+// con la recomendada preseleccionada y las razones debajo. Mismas reglas
+// de "tocado" que renderSelectorTarifaFuente(): un valor que el contador
+// ya escribió o eligió nunca se pisa solo.
+function renderPanelRetencionFuente(contenedorEl, explicacion, fuenteInput, tocado){
+  if (!contenedorEl || !explicacion || !fuenteInput) return;
+  const esc = (typeof escapeHtml === 'function') ? escapeHtml : (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const parseVal = (typeof parseMoneyValue === 'function') ? parseMoneyValue : (v) => Number(String(v).replace(/[^\d-]/g, '')) || 0;
+  const f = explicacion.fuente;
+
+  const opciones = [{ valor: 0, label: f.aplica ? 'Ninguno -- no practicar retención' : 'Ninguno -- no aplica retención' }];
+  const calculadas = opcionesRetencionFuente(f.categoriaUnica, f.sugerido);
+  opciones.push(...calculadas);
+  f.opcionesManuales.forEach((o) => { if (!opciones.some((x) => x.valor === o.valor)) opciones.push(o); });
+  if (f.valorDocumento > 0 && !opciones.some((o) => o.valor === f.valorDocumento)) {
+    opciones.push({ valor: f.valorDocumento, label: `Valor que trae la factura — $${f.valorDocumento.toLocaleString('es-CO')}` });
+  }
+  const recomendado = f.aplica && calculadas.length > 0 ? calculadas[0] : opciones[0];
+  recomendado.label += '  ✓ recomendada';
+
+  const valorActual = parseVal(fuenteInput.value);
+  let coincide = null;
+  if (valorActual > 0) {
+    coincide = opciones.find((o) => o.valor === valorActual) || null;
+    if (!coincide && tocado) {
+      coincide = { valor: valorActual, label: `Otro valor ya escrito — $${valorActual.toLocaleString('es-CO')}` };
+      opciones.push(coincide);
+    }
+  } else if (tocado) {
+    coincide = opciones[0];
+  }
+  const preseleccionado = coincide ? coincide.valor : recomendado.valor;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'rete-panel';
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+  const titulo = document.createElement('div');
+  titulo.className = 'fine';
+  titulo.textContent = 'Rete Fuente recomendada (verifica antes de guardar -- no es asesoría tributaria):';
+  wrap.appendChild(titulo);
+
+  const select = document.createElement('select');
+  select.className = 'tarifa-retencion-select';
+  select.innerHTML = opciones.map((o) => `<option value="${o.valor}"${o.valor === preseleccionado ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  select.addEventListener('change', () => {
+    const monto = Number(select.value) || 0;
+    fuenteInput.value = monto.toLocaleString('es-CO');
+    fuenteInput.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  wrap.appendChild(select);
+
+  const porque = document.createElement('div');
+  porque.className = 'rete-porque';
+  porque.style.cssText = 'font-size:var(--t-12, 12px);color:var(--text-2, #4A5E68);line-height:1.5;background:var(--surface-sunken, #EAF3F7);border-radius:var(--r-sm, 6px);padding:8px 10px;';
+  const lista = (items) => items.map((t) => `<li>${esc(t)}</li>`).join('');
+  porque.innerHTML = `<b>Por qué:</b><ul style="margin:4px 0 0;padding-left:18px;">${lista(f.razones)}</ul>`
+    + (explicacion.perfilProveedor.length ? `<div style="margin-top:6px;"><b>Proveedor:</b> ${esc(explicacion.perfilProveedor.join(' · '))}</div>` : '')
+    + (explicacion.perfilCliente.length ? `<div><b>Tu cliente:</b> ${esc(explicacion.perfilCliente.join(' · '))}</div>` : '');
+  wrap.appendChild(porque);
+
+  contenedorEl.appendChild(wrap);
+  contenedorEl.classList.add('show');
+
+  if (!coincide) fuenteInput.value = preseleccionado.toLocaleString('es-CO');
 }
 
 // ---------- Selector de tarifa de Rete Fuente por categoría ----------
@@ -1658,5 +2022,11 @@ if (typeof module !== 'undefined' && module.exports) {
     calcularReteIvaSugerido,
     calcularReteIcaSugerido,
     formatearPorcentajeTarifa,
+    normalizarPerfilFiscalDocumento,
+    tarifaNotaDocumento,
+    tarifasConNotaDocumento,
+    proveedorAutorretenedorIcaEn,
+    explicarRetenciones,
+    opcionesRetencionFuente,
   };
 }

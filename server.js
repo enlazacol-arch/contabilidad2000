@@ -16,7 +16,7 @@ const { cabecerasSeguridad, crearCors, crearLimitador } = require('./seguridad')
 // Única fuente de verdad de tarifas de retención (ver public/retenciones.js
 // -- se carga como <script> en el navegador Y aquí con require(), misma
 // tabla en los dos lados).
-const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado, itemsParaGuardar } = require('./public/retenciones');
+const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado, itemsParaGuardar, normalizarPerfilFiscalDocumento } = require('./public/retenciones');
 // Motor contable mínimo (PUC + asientos de partida doble) -- ver
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
@@ -170,6 +170,16 @@ async function ensureSchema() {
   // debe practicar retención en la fuente ni ReteICA sobre esa factura
   // (ver perfilFiscalEfectivo() en public/retenciones.js).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor BOOLEAN DEFAULT false;`);
+  // Perfil fiscal del emisor tal como lo dice el documento (prompt v4) --
+  // ver normalizarPerfilFiscalDocumento() en public/retenciones.js.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor_ica_municipio TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gran_contribuyente BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS agente_retencion_iva BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS responsable_iva TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS nota_retencion TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS nota_retencion_tarifa TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS nota_retencion_base TEXT DEFAULT '';`);
   // El documento pide aplicar la tabla del art. 383 ET (lo detecta la IA).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS solicita_articulo_383 BOOLEAN NOT NULL DEFAULT false;`);
   // Número de digitación/comprobante -- lo escribe el contador cuando YA
@@ -1650,6 +1660,8 @@ async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
   }
 }
 
+const CAMPOS_BOOLEANOS_FACTURA = ['regimen_simple', 'autorretenedor', 'solicita_articulo_383', 'saldo_vencido_detectado', 'anticipo_detectado',
+  'autorretenedor_ica', 'gran_contribuyente', 'agente_retencion_iva'];
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
   'letras_fe', 'numeros_fe', 'fecha_factura',
@@ -1660,6 +1672,8 @@ const SAVED_FIELDS = [
   'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
   'confianza_campos', 'modelo_ia', 'version_prompt', 'valor_letras_texto', 'valor_letras_numero',
   'archivo_original', 'archivo_original_tipo',
+  'autorretenedor_ica', 'autorretenedor_ica_municipio', 'gran_contribuyente', 'agente_retencion_iva', 'responsable_iva',
+  'nota_retencion', 'nota_retencion_tarifa', 'nota_retencion_base',
 ];
 
 function rowToInvoice(row) {
@@ -2787,7 +2801,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       // tarifa_ica_id es de tipo UUID igual que cliente_id -- mismo tratamiento.
       if (key === 'tarifa_ica_id') return val === '' ? null : val;
       // Estos campos son de tipo BOOLEAN -- convertir explícitamente.
-      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'solicita_articulo_383' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
+      if (CAMPOS_BOOLEANOS_FACTURA.includes(key)) {
         return val === true || val === 'true';
       }
       // confianza_campos es un objeto {campo: 0-1} -- se guarda como TEXT
@@ -3889,7 +3903,15 @@ const CAMPOS_FACTURA_JSON = `{
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
-  "autorretenedor": "true si el documento menciona explícitamente que el emisor es 'Autorretenedor' (de renta y/o de ICA) -- es muy común en facturas de servicios públicos (EPM y similares suelen imprimirlo en letra pequeña cerca del NIT del emisor, ej. 'Autorretenedor Renta -- Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO debe practicar retención en la fuente ni ReteICA sobre esta factura -- el proveedor ya se autorretiene y se la gira directamente a la DIAN/municipio.",
+  "autorretenedor": "true si el documento dice que el emisor es AUTORRETENEDOR DE RENTA (ej. 'Autorretenedor Renta', 'Somos autorretenedores' o 'Autorretenedor' sin decir de qué impuesto -- en Colombia eso se entiende de renta). Es muy común en facturas de servicios públicos (EPM y similares lo imprimen en letra pequeña cerca del NIT del emisor). OJO: si el documento dice que es autorretenedor SOLO de ICA (ej. 'Autorretenedores de ICA en La Estrella'), este campo es false y va true en autorretenedor_ica. false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO practica retención en la fuente.",
+  "autorretenedor_ica": "true si el documento dice que el emisor es autorretenedor de ICA (Industria y Comercio). false en cualquier otro caso, incluido cuando no estés seguro.",
+  "autorretenedor_ica_municipio": "SOLO si autorretenedor_ica es true y el documento dice en qué municipio (ej. 'Autorretenedores de ICA en La Estrella' -> 'La Estrella'), el nombre del municipio. Cadena vacía en cualquier otro caso.",
+  "gran_contribuyente": "true si el documento dice que el emisor es Gran Contribuyente (ej. 'Somos Grandes Contribuyentes Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro.",
+  "agente_retencion_iva": "true si el documento dice que el EMISOR es agente de retención de IVA o agente retenedor de IVA (no lo confundas con el comprador). false en cualquier otro caso, incluido cuando no estés seguro.",
+  "responsable_iva": "'si' si el documento dice que el emisor es 'Responsable de IVA' (o 'Régimen común'/'Responsable del impuesto sobre las ventas'), 'no' si dice 'No responsable de IVA' (o 'No responsable del impuesto sobre las ventas', 'Régimen simplificado'), cadena vacía si no lo dice.",
+  "nota_retencion": "Si el documento trae una instrucción o aclaración EXPLÍCITA del emisor sobre cómo practicarle las retenciones (ej. 'Retención en la fuente 2% servicio de aseo sobre AIU a partir de $105.000 o 2 UVT', 'Favor no practicar retención, somos autorretenedores', 'Practicar retención del 4%'), cópiala TAL CUAL aparece. Cadena vacía si no hay ninguna -- no la inventes ni la resumas.",
+  "nota_retencion_tarifa": "SOLO si nota_retencion dice un porcentaje de RETENCIÓN EN LA FUENTE (renta), ese porcentaje como número (ej. 2 para '2%', 3.5 para '3,5%'). 0 si no dice un porcentaje de retención en la fuente.",
+  "nota_retencion_base": "SOLO si nota_retencion dice sobre qué valor se aplica la retención en la fuente: 'aiu' si dice que es sobre el AIU (Administración, Imprevistos y Utilidad), 'subtotal' si dice que es sobre el valor antes de IVA / la base gravable. Cadena vacía si no lo dice.",
   "solicita_articulo_383": "true SOLO si el documento (casi siempre una cuenta de cobro de una persona natural) dice explícitamente que la retención en la fuente se debe calcular con la tabla del artículo 383 del Estatuto Tributario, o certifica que el emisor NO contrató o vinculó dos o más trabajadores para su actividad (rentas de trabajo). false en cualquier otro caso, incluido cuando no estés seguro.",
   "saldo_vencido_detectado": "true SOLO si el documento muestra explícitamente un 'saldo vencido', 'deuda anterior', 'saldo anterior pendiente' o similar (frecuente en facturas de servicios públicos que arrastran periodos sin pagar) -- es decir, el 'total a pagar' del documento incluye algo más que el consumo/servicio de ESTE periodo. false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si ese saldo anterior ya fue pagado antes de registrar el gasto.",
   "anticipo_detectado": "true SOLO si el documento menciona explícitamente un anticipo o avance ya entregado/descontado (ej. 'anticipo del 50% ya cancelado', 'menos avance recibido'). false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si el total de la factura ya descuenta ese anticipo.",
@@ -3936,7 +3958,7 @@ ${REGLAS_FORMATO_VALORES}`;
 // una factura vieja se ve mal leída, se sepa exactamente qué modelo y
 // qué versión del prompt la generó -- barato de dejar registrado ahora,
 // imposible de reconstruir después con precisión.
-const INVOICE_PROMPT_VERSION = 'v3';
+const INVOICE_PROMPT_VERSION = 'v4'; // v4: perfil fiscal del emisor (autorretenedor renta/ICA, gran contribuyente, retenedor IVA, responsable IVA) y nota de retención
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -4128,6 +4150,7 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
   parsed.concepto = normalizarMayusculasTexto(parsed.concepto);
 
   parsed.confianza_campos = sanitizarConfianzaCampos(parsed.confianza_campos);
+  normalizarPerfilFiscalDocumento(parsed);
 
   // ---------- Red de seguridad sobre lo que leyó la IA ----------
   // (ajustes pedidos en la revisión contable de oct. 2026)
