@@ -92,7 +92,9 @@ function renderSelectorMesContable(contenedor, opciones) {
     if (!mesContableValido(mes)) return;
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn ghost btn--sm';
+    b.className = 'btn ghost btn--sm mes-atajo';
+    b.dataset.mes = mes;
+    b.setAttribute('aria-pressed', 'false');
     b.textContent = `${texto} (${nombreMesContable(mes)})`;
     b.addEventListener('click', () => fijar(mes));
     fila.appendChild(b);
@@ -103,6 +105,12 @@ function renderSelectorMesContable(contenedor, opciones) {
 
   function actualizar() {
     const mes = input.value;
+    // El atajo del mes elegido queda resaltado.
+    fila.querySelectorAll('.mes-atajo').forEach((b) => {
+      const activo = b.dataset.mes === mes;
+      b.classList.toggle('activo', activo);
+      b.setAttribute('aria-pressed', activo ? 'true' : 'false');
+    });
     if (!mesContableValido(mes)) {
       ayuda.textContent = op.obligatorio
         ? 'Elige en qué mes contable se causa esta factura -- es obligatorio para aprobarla.'

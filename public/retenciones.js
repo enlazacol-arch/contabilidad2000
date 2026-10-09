@@ -1361,6 +1361,31 @@ function tarifaFuenteOpciones(categoria){
 // el IVA de cada línea prorrateado a partir del IVA total de la factura
 // según la participación de cada ítem en el subtotal. Mismo cálculo en
 // Escanear y en Carga masiva -- de ahí que viva aquí y no en cada página.
+// ---------- Retención "según tarifas por ítem" (columna informativa) ----------
+// La Rete Fuente de la FICHA manda: si quedó en $0 (no aplica, o el
+// contador eligió "Ninguno"), cada línea también va en $0 -- antes cada
+// ítem tomaba por defecto la primera tarifa de su categoría y la suma
+// mostraba una retención que la factura no tiene. Si la ficha sí tiene
+// retención, cada ítem usa la tarifa que el contador le eligió o, si no
+// eligió, la primera de su categoría.
+function tarifaRetencionItem(item, reteFuenteFicha) {
+  if ((Number(reteFuenteFicha) || 0) === 0) return 0;
+  if (item && item.tarifa_retencion !== undefined && item.tarifa_retencion !== null && item.tarifa_retencion !== '') return Number(item.tarifa_retencion) || 0;
+  const opciones = tarifaFuenteOpciones(item && item.categoria_concepto);
+  return opciones[1] ? opciones[1].valor : 0;
+}
+// Monto de la retención de UNA línea con esa tarifa. En vigilancia/aseo
+// y temporales la base es el AIU de la línea (no el subtotal); sin AIU
+// todavía devuelve null (no se puede calcular).
+function montoRetencionItem(item, tarifa) {
+  if (!item || !tarifa) return 0;
+  if (esCategoriaBaseAiu(item.categoria_concepto)) {
+    if (item.aiu === undefined || item.aiu === null || item.aiu === '') return null;
+    return Math.round((Number(item.aiu) || 0) * tarifa);
+  }
+  return Math.round((Number(item.subtotal) || 0) * tarifa);
+}
+
 function itemsParaGuardar(items, ivaTotalFactura) {
   const lista = items || [];
   const totalSubtotalItems = lista.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
@@ -2016,6 +2041,8 @@ if (typeof module !== 'undefined' && module.exports) {
     calcularRetencionSugeridaPorItems,
     normalizarItemsDesdeIA,
     tarifaFuenteOpciones,
+    tarifaRetencionItem,
+    montoRetencionItem,
     itemsParaGuardar,
     desgloseDesdeItems,
     desgloseAiuDesdeItems,

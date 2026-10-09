@@ -3931,6 +3931,9 @@ const CAMPOS_FACTURA_JSON = `{
   "valor_sin_iva": "subtotal ANTES de IVA de TODA la factura, en pesos colombianos ENTEROS (ver regla de formato abajo) -- la suma de TODAS las líneas, incluidas las exentas o excluidas (IVA 0%), no solo la parte gravada con IVA. Ej.: una línea de servicio de $2.909.057 al 0% y una de AIU de $290.906 al 19% dan un valor_sin_iva de $3.199.963, no $290.906. Casi siempre es el 'SUBTOTAL' impreso.",
   "valor_iva": "valor del IVA (impuesto), en pesos colombianos ENTEROS. Si la factura no discrimina IVA, usa 0",
   "valor_con_iva": "valor TOTAL de la factura ANTES de descontar retenciones (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. OJO: algunas facturas y cuentas de cobro muestran como 'Total a pagar' o 'Neto a pagar' un valor que YA RESTÓ la Retención en la Fuente, ReteIVA o ReteICA -- en ese caso NO uses ese neto: usa el total antes de retenciones (subtotal + IVA) y anota cada retención descontada en su propio campo (rete_fuente, rete_iva, rete_ica).",
+  "total_a_pagar_impreso": "el valor TOTAL A PAGAR tal como aparece IMPRESO en el documento (casi siempre el número más destacado: 'Total a pagar', 'Valor a pagar', 'Total', a veces junto al código de barras), copiado tal cual en pesos ENTEROS, SIN calcularlo ni ajustarlo para que cuadre con nada. 0 si no se ve.",
+  "lectura_dudosa": "true si NO alcanzaste a leer con certeza algún valor del documento (foto borrosa, girada, con sombra o reflejo, cortada, números tapados) -- false si todo se lee con claridad. Sé honesto: es mucho mejor avisar que entregar un número dudoso como si fuera seguro.",
+  "motivo_lectura_dudosa": "SOLO si lectura_dudosa es true: en pocas palabras, qué no se leyó bien (ej. 'el valor de la línea de Energía está borroso', 'la foto corta el subtotal'). Cadena vacía si lectura_dudosa es false.",
   "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
   "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
@@ -3970,6 +3973,8 @@ Ejemplo correcto: si el documento muestra "1.487.500", el JSON debe llevar 14875
 
 Muchas facturas electrónicas colombianas incluyen una sección "Retenciones" o "Valores informativos" con Rete fuente, Rete IVA y Rete ICA (casi siempre en 0 si no aplica) — revisa si el documento la tiene antes de responder.
 
+NUNCA inventes ni ajustes un número para que los totales cuadren: copia cada valor como se ve en el documento. Si un número no se alcanza a leer con certeza, NO lo completes de memoria ni lo deduzcas de los demás -- déjalo como alcances a leerlo, marca lectura_dudosa en true, explica cuál en motivo_lectura_dudosa y baja su confianza. Que los valores no cuadren entre sí es una señal útil para el contador; esconderla es peor que avisarla.
+
 Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.
 
 Si documento_valido es false (el documento no es factura de venta, cuenta de cobro, ni factura de servicios públicos), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
@@ -3996,7 +4001,8 @@ ${REGLAS_FORMATO_VALORES}`;
 // v4: perfil fiscal del emisor y nota de retención.
 // v5: paquete -- las líneas de la tabla de una factura nunca son documentos distintos;
 //     valor_sin_iva incluye las líneas exentas (0% IVA), no solo la base gravada.
-const INVOICE_PROMPT_VERSION = 'v5';
+// v6: total_a_pagar_impreso, lectura_dudosa/motivo_lectura_dudosa; nunca ajustar valores para que cuadren.
+const INVOICE_PROMPT_VERSION = 'v6';
 
 // Prompt para archivos que pueden traer VARIOS documentos distintos
 // concatenados en un mismo PDF -- por ejemplo, varias facturas
@@ -4166,11 +4172,15 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
     };
   }
 
-  for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
+  for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica', 'total_a_pagar_impreso']) {
     if (parsed[key] !== undefined && parsed[key] !== '' && !isNaN(Number(parsed[key]))) {
       parsed[key] = Math.round(Number(parsed[key]));
     }
   }
+  // Lo que la IA dice de su propia lectura (prompt v6) -- ver
+  // motivosLecturaDudosa() en public/excepciones.js.
+  parsed.lectura_dudosa = parsed.lectura_dudosa === true || parsed.lectura_dudosa === 'true';
+  parsed.motivo_lectura_dudosa = parsed.lectura_dudosa ? String(parsed.motivo_lectura_dudosa || '').trim().slice(0, 300) : '';
 
   // Sin ningún valor a pagar no hay nada que causar: casi siempre es un
   // anexo (ej. la certificación del Art. 383 que acompaña una cuenta de

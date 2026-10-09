@@ -90,7 +90,69 @@ function dvNoCoincide(inv) {
   return !!esperado && esperado !== dv;
 }
 
+// ---------- Lectura dudosa ----------
+// La IA a veces lee mal un número (foto girada, borrosa, con sombra) y
+// arma el resto alrededor de ese error para que "cuadre" -- pasó con una
+// factura de EPM: la energía (2.803 kWh) salió en $25.828 en vez de
+// ~$2,5 millones, y el total quedó en $444.387 cuando el documento dice
+// en grande $3.001.188. Aquí se juntan las pruebas de que la lectura no
+// es confiable, con lo que el propio documento dice:
+//   - el TOTAL A PAGAR impreso (total_a_pagar_impreso, copiado tal cual)
+//     no coincide con el total leído (ni con el total menos retenciones
+//     o abonos);
+//   - las líneas leídas no suman el subtotal;
+//   - la IA misma dijo que no leyó bien algo (lectura_dudosa);
+//   - la IA tiene poca confianza en un valor clave.
+// Se calcula EN VIVO: si el contador corrige el valor mal leído y todo
+// vuelve a cuadrar con el total impreso, el aviso de los dos primeros
+// motivos desaparece solo.
+const CONFIANZA_MINIMA_LECTURA = 0.6;
+const ETIQUETAS_CONFIANZA = { valor_sin_iva: 'el valor sin IVA', valor_iva: 'el IVA', valor_con_iva: 'el total', nit_cc: 'el NIT del emisor' };
+function itemsParaExcepciones(inv) {
+  if (Array.isArray(inv.items)) return inv.items;
+  if (typeof inv.items === 'string') { try { const x = JSON.parse(inv.items); return Array.isArray(x) ? x : []; } catch (e) { return []; } }
+  return [];
+}
+function motivosLecturaDudosa(inv) {
+  if (!inv) return [];
+  const motivos = [];
+  const n = (v) => Number(v) || 0;
+  const total = n(inv.valor_con_iva);
+  const impreso = n(inv.total_a_pagar_impreso);
+  if (impreso > 0 && total > 0) {
+    const retenciones = n(inv.rete_fuente) + n(inv.rete_iva) + n(inv.rete_ica);
+    const abonado = n(inv.valor_abonado);
+    const candidatos = [total, total - retenciones, total - abonado, total - retenciones - abonado];
+    if (!candidatos.some((c) => Math.abs(c - impreso) <= 1)) {
+      const saldo = inv.saldo_vencido_detectado === true || inv.saldo_vencido_detectado === 'true';
+      motivos.push(`El total a pagar impreso en el documento (${formatCOPParaExcepciones(impreso)}) no coincide con el total leído (${formatCOPParaExcepciones(total)})${saldo ? ' -- puede incluir saldo de periodos anteriores' : ''}.`);
+    }
+  }
+  const items = itemsParaExcepciones(inv);
+  if (items.length > 0) {
+    const suma = items.reduce((t, it) => t + n(it && it.subtotal), 0);
+    if (Math.abs(suma - n(inv.valor_sin_iva)) > 1) {
+      motivos.push(`Las líneas leídas suman ${formatCOPParaExcepciones(suma)}, pero el subtotal es ${formatCOPParaExcepciones(inv.valor_sin_iva)}.`);
+    }
+  }
+  if (inv.lectura_dudosa === true || inv.lectura_dudosa === 'true') {
+    motivos.push(`La IA indicó que no leyó bien parte del documento${inv.motivo_lectura_dudosa ? ': ' + inv.motivo_lectura_dudosa : '.'}`);
+  }
+  const conf = inv.confianza_campos && typeof inv.confianza_campos === 'object' ? inv.confianza_campos : {};
+  const dudosos = Object.keys(ETIQUETAS_CONFIANZA).filter((k) => conf[k] !== undefined && Number(conf[k]) < CONFIANZA_MINIMA_LECTURA);
+  if (dudosos.length > 0) {
+    motivos.push(`La IA no está segura de ${dudosos.map((k) => ETIQUETAS_CONFIANZA[k]).join(', ')}.`);
+  }
+  return motivos;
+}
+
 const DEFINICIONES_EXCEPCIONES = [
+  {
+    tipo: 'lectura_dudosa',
+    etiqueta: 'Lectura dudosa',
+    detecta: (inv) => motivosLecturaDudosa(inv).length > 0,
+    detalle: (inv) => `Revisa los valores contra el documento antes de guardar: ${motivosLecturaDudosa(inv).join(' ')}`,
+  },
   {
     // La misma factura no se causa dos veces (ver duplicados.js): aviso
     // desde que se lee, con la factura ya guardada con la que coincide.
@@ -182,5 +244,6 @@ if (typeof module !== 'undefined' && module.exports) {
     soloDigitosParaExcepciones,
     valoresDescuadrados,
     TOLERANCIA_DESCUADRE,
+    motivosLecturaDudosa,
   };
 }

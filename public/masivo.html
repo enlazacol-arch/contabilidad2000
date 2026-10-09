@@ -626,7 +626,7 @@ function guardarEdicionItem(item){
   // reteFuenteTocado también: sin él, al refrescar la bandeja el selector
   // de tarifa creía que un valor escrito a mano era un cálculo viejo y lo
   // reemplazaba por el recomendado.
-  mapa[item.id] = { data: item.data, clienteId: item.clienteId, tipoMovimiento: item.tipoMovimiento, estado: item.estado, reteFuenteTocado: !!item.reteFuenteTocado };
+  mapa[item.id] = { data: item.data, clienteId: item.clienteId, tipoMovimiento: item.tipoMovimiento, estado: item.estado, reteFuenteTocado: !!item.reteFuenteTocado, confirmoLectura: !!item.confirmoLectura };
   guardarEdicionesPendientes(mapa);
 }
 function borrarEdicionItem(id){
@@ -806,7 +806,60 @@ function actualizarFilaRetencionSugeridaMasivo(){
   el.outerHTML = calcularFilaRetencionSugeridaHtml(itemAbierto);
 }
 
+// Redibujar la ficha (al cambiar ítems, categoría, etc.) no debe mover
+// la pantalla: se recuerda dónde estaba el scroll y en qué campo estaba
+// el cursor, y se devuelven después de dibujar.
+// Fila de ítems que se acaba de editar -- al redibujar, esa fila se deja
+// en el mismo lugar de la pantalla aunque cambie lo de arriba (ej. se
+// quita un aviso que ya no aplica).
+let anclaFicha = null;
+function recordarPosicionFicha(){
+  const modalDatos = document.getElementById('modalDatos');
+  const contenedores = [modalDatos, modalDatos.closest('.file-modal-content')].filter(Boolean);
+  const activo = document.activeElement;
+  let selector = null, cursor = null;
+  const anclaEl = anclaFicha ? modalDatos.querySelector(anclaFicha) : null;
+  const ancla = anclaEl ? { selector: anclaFicha, top: anclaEl.getBoundingClientRect().top } : null;
+  anclaFicha = null;
+  if (activo && modalDatos.contains(activo)) {
+    const fila = activo.closest('tr[data-idx]');
+    const clase = [...activo.classList][0];
+    if (activo.dataset.reteKey) selector = `[data-rete-key="${activo.dataset.reteKey}"]`;
+    else if (activo.dataset.campoKey) selector = `[data-campo-key="${activo.dataset.campoKey}"]`;
+    else if (fila && clase) selector = `tr[data-idx="${fila.dataset.idx}"] .${clase}`;
+    try { cursor = activo.selectionStart; } catch (e) { cursor = null; }
+  }
+  return { contenedores, scrolls: contenedores.map((c) => c.scrollTop), selector, cursor, ancla };
+}
+function restaurarPosicionFicha(pos){
+  if (!pos) return;
+  pos.contenedores.forEach((c, i) => { c.scrollTop = pos.scrolls[i]; });
+  if (pos.ancla) {
+    const el = document.getElementById('modalDatos').querySelector(pos.ancla.selector);
+    const contenedor = pos.contenedores.find((c) => c.scrollHeight > c.clientHeight) || pos.contenedores[0];
+    if (el && contenedor) contenedor.scrollTop += el.getBoundingClientRect().top - pos.ancla.top;
+  }
+  if (!pos.selector) return;
+  const el = document.getElementById('modalDatos').querySelector(pos.selector);
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  if (pos.cursor !== null && typeof el.setSelectionRange === 'function') {
+    try { el.setSelectionRange(pos.cursor, pos.cursor); } catch (e) { /* select: sin cursor */ }
+  }
+}
+
 function renderFichaCompleta(item, modoEdicion){
+  const mismaFicha = itemAbierto && itemAbierto.id === item.id;
+  const posicionPrevia = mismaFicha ? recordarPosicionFicha() : null;
+  // Al redibujar la misma ficha (ej. tras editar un ítem) se queda en el
+  // modo en que estaba -- antes volvía a solo lectura.
+  if (modoEdicion === undefined && mismaFicha) modoEdicion = !!itemAbierto._modoEdicion;
+  item._modoEdicion = !!modoEdicion;
+  renderFichaCompletaSinPosicion(item, modoEdicion);
+  restaurarPosicionFicha(posicionPrevia);
+}
+
+function renderFichaCompletaSinPosicion(item, modoEdicion){
   const modalDatos = document.getElementById('modalDatos');
   itemAbierto = item;
 
@@ -931,6 +984,12 @@ function renderFichaCompleta(item, modoEdicion){
   // compartida con Escanear, Facturas y Revisión (Tarea 8, "excepciones
   // unificadas") -- el texto sigue siendo propio de esta pantalla.
   const avisosDoc = [];
+  // Lectura dudosa va de PRIMERA (se recalcula con los valores actuales:
+  // si el contador corrige el número mal leído y todo cuadra, se va sola).
+  const motivosDudosa = motivosLecturaDudosa(d);
+  if (motivosDudosa.length > 0) {
+    avisosDoc.push(`⚠ <b>La IA no leyó bien este documento</b> -- revisa los valores contra la foto antes de guardar: ${escapeHtml(motivosDudosa.join(' '))}`);
+  }
   if (tieneExcepcion(d, 'saldo_vencido')) {
     avisosDoc.push('⚠ El documento muestra un <b>saldo vencido</b> -- puede incluir deuda de un periodo anterior ya pagado. Ajusta "Valor Sin IVA"/"Valor Con IVA" arriba si hace falta.');
   }
@@ -1026,6 +1085,10 @@ function renderItemsMiniPanel(item){
   // mismo criterio que Escanear -- no reemplaza ni alimenta Rete Fuente de
   // la ficha, que sigue siendo un solo valor por factura.
   let totalRetencionItems = 0;
+  let itemsSinAiu = 0;
+  // La Rete Fuente de la ficha manda (ver tarifaRetencionItem en retenciones.js).
+  const reteFuenteFicha = Number(d.rete_fuente) || 0;
+  const fichaSinRetencion = reteFuenteFicha === 0;
 
   const filas = d.items.map((it, idx) => {
     const opciones = CATEGORIAS.map(([val, label]) =>
@@ -1056,10 +1119,11 @@ function renderItemsMiniPanel(item){
     // (misma tabla que usa el estimado de arriba) -- informativa, el
     // valor real de Rete Fuente se registra una sola vez en la ficha.
     const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(it.categoria_concepto) : [{ valor: 0, label: 'Ninguno' }];
-    const tarifaActualItem = it.tarifa_retencion !== undefined ? Number(it.tarifa_retencion) : (tarifaOpts[1] ? tarifaOpts[1].valor : 0);
+    const tarifaActualItem = tarifaRetencionItem(it, reteFuenteFicha);
     const tarifaSelectOpts = tarifaOpts.map((o) => `<option value="${o.valor}"${o.valor === tarifaActualItem ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
-    const montoTarifaItem = Math.round((Number(it.subtotal) || 0) * tarifaActualItem);
-    if (tarifaActualItem > 0) totalRetencionItems += montoTarifaItem;
+    const montoTarifaItem = montoRetencionItem(it, tarifaActualItem);
+    if (tarifaActualItem > 0 && montoTarifaItem === null) itemsSinAiu++;
+    else if (tarifaActualItem > 0) totalRetencionItems += montoTarifaItem;
     // AIU solo aplica a categorías con base especial (vigilancia_aseo/
     // servicios_temporales) -- mismo criterio que Escanear, para que la
     // retención de esas categorías no se calcule sobre el subtotal
@@ -1075,8 +1139,8 @@ function renderItemsMiniPanel(item){
       <td>${subcuentaFieldHtml}</td>
       <td title="Componente de AIU (Administración + Imprevistos + Utilidad), solo si la factura lo desglosa -- deja vacío si no se sabe.">${aiuCelda}</td>
       <td title="Tarifa de retención recomendada para esta línea, según su categoría -- informativa.">
-        <select class="im-tarifa" style="font-size:var(--t-12);">${tarifaSelectOpts}</select>
-        <div style="margin-top:2px;font-size:var(--t-12);font-style:italic;color:var(--ink-faint);">${tarifaActualItem > 0 ? '≈ $' + montoTarifaItem.toLocaleString('es-CO') : '—'}</div>
+        <select class="im-tarifa" style="font-size:var(--t-12);"${fichaSinRetencion ? ' disabled title="La Rete Fuente de la factura está en $0 -- cámbiala arriba si sí aplica."' : ''}>${tarifaSelectOpts}</select>
+        <div style="margin-top:2px;font-size:var(--t-12);font-style:italic;color:var(--ink-faint);">${tarifaActualItem > 0 ? (montoTarifaItem === null ? 'falta AIU' : '≈ $' + montoTarifaItem.toLocaleString('es-CO')) : '—'}</div>
       </td>
       <td><button type="button" class="items-mini-del" title="Quitar" ${d.items.length <= 1 ? 'disabled' : ''}>✕</button></td>
     </tr>`;
@@ -1100,6 +1164,8 @@ function renderItemsMiniPanel(item){
       </div>
       <div class="items-mini-retencion-total" title="Suma de la retención de cada línea, según la tarifa que seleccionaste ítem por ítem arriba -- informativo, no reemplaza el valor de Rete Fuente de la ficha.">
         Retención según tarifas por ítem: <b>$${totalRetencionItems.toLocaleString('es-CO')}</b>
+        ${fichaSinRetencion ? ' <span class="fine">(la Rete Fuente de la factura está en $0)</span>' : ''}
+        ${itemsSinAiu > 0 ? ` <span class="fine">(${itemsSinAiu} ítem${itemsSinAiu > 1 ? 's' : ''} sin AIU aún -- no incluido${itemsSinAiu > 1 ? 's' : ''})</span>` : ''}
       </div>
     </div>
   `;
@@ -1128,13 +1194,18 @@ function renderItemsMiniPanel(item){
     if (e.target.classList.contains('im-descripcion')) {
       d.items[idx].descripcion = e.target.value;
     } else if (e.target.classList.contains('im-subtotal')) {
+      // Mientras escribe solo se guarda el dato -- antes cada tecla
+      // redibujaba toda la ficha: el scroll subía solo y se perdía el
+      // cursor. Se redibuja al salir del campo (ver 'change' abajo).
       d.items[idx].subtotal = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '') || '0';
-      onCambioItems();
+      d.valor_sin_iva = String(d.items.reduce((s, it) => s + (Number(it.subtotal) || 0), 0));
+      d.valor_con_iva = String((Number(d.valor_sin_iva) || 0) + (Number(d.valor_iva) || 0));
+      guardarEdicionItem(item);
     } else if (e.target.classList.contains('im-aiu')) {
       // Vacío se guarda como '' (no '0') -- "no se sabe" es distinto de
       // "el AIU es cero" (ver retenciones.js).
       d.items[idx].aiu = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '');
-      onCambioItems();
+      guardarEdicionItem(item);
     } else if (e.target.classList.contains('im-subcuenta')) {
       // Solo entra aquí tras elegir "Escribir código a mano" (ver
       // 'change' abajo), que cambió el <select> por un <input> de
@@ -1146,6 +1217,12 @@ function renderItemsMiniPanel(item){
   });
   tbody.addEventListener('change', (e) => {
     const idx = Number(e.target.closest('tr').dataset.idx);
+    // Cualquier cambio en una fila: al redibujar, esa fila se queda en su sitio.
+    anclaFicha = `#itemsMiniTbody tr[data-idx="${idx}"]`;
+    if (e.target.classList.contains('im-subtotal') || e.target.classList.contains('im-aiu')) {
+      onCambioItems(); // ya terminó de escribir: se recalcula y se redibuja
+      return;
+    }
     if (e.target.classList.contains('im-categoria')) {
       d.items[idx].categoria_concepto = e.target.value;
       const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
@@ -1301,6 +1378,7 @@ function actualizarEstimadosRetencionMasivo(){
   if (fuenteVisible !== (Number(d.rete_fuente) || 0)) {
     d.rete_fuente = fuenteVisible;
     guardarEdicionItem(itemAbierto);
+    renderItemsMiniPanel(itemAbierto); // la columna de ítems sigue a la Rete Fuente de la ficha
   }
   agregarAvisoUvtRespaldoSiAplica(estFuenteEl, d.fecha_factura);
 
@@ -1471,6 +1549,7 @@ document.getElementById('modalDatos').addEventListener('input', (e) => {
     itemAbierto.data[e.target.dataset.reteKey] = parseMoneyValue(e.target.value);
     actualizarEstimadosRetencionMasivo();
     guardarEdicionItem(itemAbierto);
+    if (e.target.dataset.reteKey === 'rete_fuente') renderItemsMiniPanel(itemAbierto);
     return;
   }
   // Campos de la ficha editables en modo "Revisar" -- se guardan
@@ -1785,6 +1864,7 @@ async function refrescarLoteActivo(){
         it.tipoMovimiento = edicion.tipoMovimiento;
         it.estado = edicion.estado;
         it.reteFuenteTocado = !!edicion.reteFuenteTocado;
+        it.confirmoLectura = !!edicion.confirmoLectura;
       }
     });
     // Limpieza: una corrección guardada localmente para un ítem que ya
@@ -2167,6 +2247,11 @@ function renderSummary(){
           ${item.duplicadoAlGuardar ? `<div class="fc-acciones"><button type="button" class="btn ghost btn--sm" data-role="guardar-forzando-duplicado" data-idx="${idx}">No es la misma: guardar de todas formas</button></div>` : ''}
         </div>
       ` : ''}
+      ${tieneExcepcion(item.data, 'lectura_dudosa') && !item.confirmoLectura ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--stamp-soft);border-radius:var(--r-sm);">
+          <div style="color:var(--err);font-size:var(--t-13);">⚠ <b>La IA no leyó bien este documento:</b> ${escapeHtml(motivosLecturaDudosa(item.data).join(' '))} Ábrela con "Revisar" y compara los valores con la foto -- no se guarda con "Guardar facturas listas" hasta que confirmes. <button type="button" data-role="confirmar-lectura" data-idx="${idx}" style="margin-left:4px;font-size:var(--t-12);font-weight:600;padding:4px 9px;border-radius:var(--r-sm);border:1px solid var(--err);background:#fff;color:var(--err);cursor:pointer;">Ya revisé los valores</button></div>
+        </div>
+      ` : ''}
       ${tieneExcepcion(item.data, 'nit_por_verificar') ? `
         <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:var(--warn-bg);border-radius:var(--r-sm);">
           <div style="color:var(--warn);font-size:var(--t-13);">⚠ ${escapeHtml((listaExcepciones(item.data).find((x) => x.tipo === 'nit_por_verificar') || {}).detalle || '')}</div>
@@ -2465,6 +2550,12 @@ async function guardarFacturaIndividual(idx, btn, forzarSinNit, forzarLetras, fo
     return;
   }
 
+  if (tieneExcepcion(item.data, 'lectura_dudosa') && !item.confirmoLectura) {
+    item.errorGuardado = 'La IA no leyó bien este documento -- revisa los valores contra la foto y dale "Ya revisé los valores" antes de guardar.';
+    renderSummary();
+    return;
+  }
+
   const sinNit = tieneExcepcion(item.data, 'sin_nit');
   if (sinNit && !forzarSinNit) {
     item.pendienteConfirmarSinNit = true;
@@ -2553,6 +2644,16 @@ summaryBody.addEventListener('click', async (e) => {
     return;
   }
 
+  const btnConfirmarLectura = e.target.closest('[data-role="confirmar-lectura"]');
+  if (btnConfirmarLectura) {
+    const item = lote[Number(btnConfirmarLectura.dataset.idx)];
+    if (!item) return;
+    item.confirmoLectura = true;
+    guardarEdicionItem(item);
+    renderSummary();
+    return;
+  }
+
   const btnGuardarSinLetras = e.target.closest('[data-role="guardar-sin-letras"]');
   if (btnGuardarSinLetras) {
     const idx = Number(btnGuardarSinLetras.dataset.idx);
@@ -2635,8 +2736,12 @@ btnGuardarTodas.addEventListener('click', async () => {
   // el masivo -- se salta aquí (igual que la digitación) y queda
   // marcada en su tarjeta con el aviso + "Guardar de todas formas", así
   // el contador confirma una por una cuál de verdad no tiene ese dato.
-  const sinNit = conDigitacion.filter(i => tieneExcepcion(i.data, 'sin_nit'));
-  const conNit = conDigitacion.filter(i => !tieneExcepcion(i.data, 'sin_nit'));
+  // Lectura dudosa: no se guarda en bloque hasta que el contador confirme
+  // que revisó los valores contra la foto ("Ya revisé los valores").
+  const lecturaDudosa = conDigitacion.filter((i) => tieneExcepcion(i.data, 'lectura_dudosa') && !i.confirmoLectura);
+  const conLecturaOk = conDigitacion.filter((i) => !(tieneExcepcion(i.data, 'lectura_dudosa') && !i.confirmoLectura));
+  const sinNit = conLecturaOk.filter(i => tieneExcepcion(i.data, 'sin_nit'));
+  const conNit = conLecturaOk.filter(i => !tieneExcepcion(i.data, 'sin_nit'));
   sinNit.forEach((i) => { i.pendienteConfirmarSinNit = true; });
   // Igual criterio para el valor en letras que no coincide con el valor
   // en números -- se salta y queda marcada en su tarjeta, en vez de
@@ -2662,6 +2767,7 @@ btnGuardarTodas.addEventListener('click', async () => {
 
   const avisos = [];
   if (sinDigitacion.length > 0) avisos.push(`${sinDigitacion.length} sin número de digitación`);
+  if (lecturaDudosa.length > 0) avisos.push(`${lecturaDudosa.length} con lectura dudosa (revísalas)`);
   if (sinNit.length > 0) avisos.push(`${sinNit.length} sin NIT/cédula del emisor`);
   if (sinLetrasOk.length > 0) avisos.push(`${sinLetrasOk.length} con el valor en letras distinto al de números`);
   if (sinCuadrar.length > 0) avisos.push(`${sinCuadrar.length} con "sin IVA + IVA" distinto de "con IVA"`);

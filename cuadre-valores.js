@@ -35,7 +35,9 @@ function corregirSubtotalConItems(datos) {
   const subtotal = Number(datos.valor_sin_iva) || 0;
   const iva = Number(datos.valor_iva) || 0;
   const total = Number(datos.valor_con_iva) || 0;
-  const letras = Number(datos.valor_letras_numero) || 0;
+  // Árbitro: el valor en letras o, si no hay, el total a pagar impreso
+  // (prompt v6) -- los dos los escribe el propio documento.
+  const letras = Number(datos.valor_letras_numero) || Number(datos.total_a_pagar_impreso) || 0;
   if (!(sumaItems > 0) || !(letras > 0)) return false;
   const cerca = (a, b) => Math.abs(a - b) <= 1;
   if (cerca(sumaItems, subtotal)) return false;      // ya cuadra
@@ -46,7 +48,7 @@ function corregirSubtotalConItems(datos) {
   datos.valor_con_iva_leido = total;
   datos.valor_sin_iva = Math.round(sumaItems);
   datos.valor_con_iva = Math.round(sumaItems + iva);
-  datos.aviso_valores = `El valor sin IVA leído (${pesos(subtotal)}) no incluía todas las líneas de la factura: las líneas suman ${pesos(sumaItems)} y, con el IVA, dan ${pesos(sumaItems + iva)}, igual al valor en letras. Se usó ese valor -- revísalo contra el documento.`;
+  datos.aviso_valores = `El valor sin IVA leído (${pesos(subtotal)}) no incluía todas las líneas de la factura: las líneas suman ${pesos(sumaItems)} y, con el IVA, dan ${pesos(sumaItems + iva)}, igual al ${Number(datos.valor_letras_numero) ? 'valor en letras' : 'total a pagar impreso'}. Se usó ese valor -- revísalo contra el documento.`;
   if (datos.confianza_campos && typeof datos.confianza_campos === 'object') {
     datos.confianza_campos.valor_sin_iva = Math.min(Number(datos.confianza_campos.valor_sin_iva ?? 1), 0.5);
     datos.confianza_campos.valor_con_iva = Math.min(Number(datos.confianza_campos.valor_con_iva ?? 1), 0.5);
