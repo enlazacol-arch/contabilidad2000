@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const { Pool } = require('pg');
+const { crearPool } = require('./db-conexion');
 const integraciones = require('./integraciones');
 const cartera = require('./cartera');
 const lotes = require('./public/lotes');
@@ -86,10 +86,9 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 // Conexión a PostgreSQL. Supabase requiere SSL; en local (Postgres propio)
 // normalmente no hace falta, por eso se desactiva la verificación estricta
 // del certificado en vez de exigirla siempre.
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
-});
+// Keep-alive, tiempos, manejo de errores del pool y reintento de las
+// lecturas cuando se corta la conexión -- ver db-conexion.js.
+const pool = crearPool(DATABASE_URL);
 
 async function ensureSchema() {
   await pool.query(`
@@ -5268,7 +5267,7 @@ app.get('/api/lotes/activo', requireAuth, async (req, res) => {
     const bandeja = await lotes.bandejaPendiente(req.firmaId, req.userId, clienteId);
     res.json(bandeja || null);
   } catch (err) {
-    console.error('Error leyendo el lote activo:', err);
+    console.error(`Error leyendo el lote activo (${err.code || 'sin código'}):`, err);
     res.status(500).json({ error: 'No se pudo consultar el estado del procesamiento.' });
   }
 });
