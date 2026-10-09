@@ -3695,7 +3695,9 @@ function detectarInconsistenciasValores(payload){
   // misma confirmación explícita que cualquier otra inconsistencia.
   if (currentInvoiceData && currentInvoiceData.valor_letras_texto) {
     const valorLetrasNumero = Number(currentInvoiceData.valor_letras_numero) || 0;
-    const facturaConValorActual = { valor_letras_texto: currentInvoiceData.valor_letras_texto, valor_letras_numero: currentInvoiceData.valor_letras_numero, valor_con_iva: conIva };
+    // Con retenciones y abono: las letras pueden ser el valor a pagar (neto).
+    const facturaConValorActual = { valor_letras_texto: currentInvoiceData.valor_letras_texto, valor_letras_numero: currentInvoiceData.valor_letras_numero, valor_con_iva: conIva,
+      rete_fuente: payload.rete_fuente, rete_iva: payload.rete_iva, rete_ica: payload.rete_ica, valor_abonado: payload.valor_abonado };
     if (tieneExcepcion(facturaConValorActual, 'letras_no_coincide')) {
       problemas.push(`El valor en letras del documento ("${currentInvoiceData.valor_letras_texto}" ≈ $${valorLetrasNumero.toLocaleString('es-CO')}) no coincide con el Valor Con IVA en números ($${conIva.toLocaleString('es-CO')}) -- verifica cuál es el correcto contra el documento original.`);
     }

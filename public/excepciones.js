@@ -74,6 +74,16 @@ function valoresDescuadrados(inv) {
   return sinIva > 0 && conIva > 0 && Math.abs((sinIva + iva) - conIva) > TOLERANCIA_DESCUADRE;
 }
 
+// Valores con los que el número escrito en letras puede coincidir: el
+// total, o el neto a pagar (total menos retenciones y/o abonos).
+function valoresQueCuadranConLetras(inv) {
+  const n = (v) => Number(v) || 0;
+  const total = n(inv.valor_con_iva);
+  const retenciones = n(inv.rete_fuente) + n(inv.rete_iva) + n(inv.rete_ica);
+  const abonado = n(inv.valor_abonado);
+  return [total, total - retenciones, total - abonado, total - retenciones - abonado];
+}
+
 // Cada definición: `tipo` (id estable, útil para CSS/filtros), `etiqueta`
 // (texto corto para la insignia), `detecta(inv)` (boolean) y
 // `detalle(inv)` (la explicación completa, para el panel/tooltip).
@@ -178,13 +188,30 @@ const DEFINICIONES_EXCEPCIONES = [
   {
     tipo: 'letras_no_coincide',
     etiqueta: 'Letras ≠ números',
+    // Muchas facturas escriben en letras el NETO a pagar (total menos
+    // retenciones y abonos), no el total -- eso no es un error. Y si el
+    // contador ya lo revisó (letras_revisado), no se vuelve a avisar.
     detecta: (inv) => {
       if (!inv.valor_letras_texto) return false;
+      if (inv.letras_revisado === true || inv.letras_revisado === 'true') return false;
+      const numero = Number(inv.valor_letras_numero) || 0;
+      return numero > 0 && !valoresQueCuadranConLetras(inv).some((v) => Math.abs(numero - v) <= 1);
+    },
+    detalle: (inv) => {
       const numero = Number(inv.valor_letras_numero) || 0;
       const total = Number(inv.valor_con_iva) || 0;
-      return numero > 0 && Math.abs(numero - total) > 1;
+      const n = (v) => Number(v) || 0;
+      const retenciones = n(inv.rete_fuente) + n(inv.rete_iva) + n(inv.rete_ica);
+      const base = `El valor escrito en letras ("${inv.valor_letras_texto}", ≈ ${formatCOPParaExcepciones(numero)}) no coincide con el total (${formatCOPParaExcepciones(total)}) ni con el valor a pagar (${formatCOPParaExcepciones(total - retenciones - n(inv.valor_abonado))}).`;
+      const diferencia = total - numero;
+      if (diferencia > 0 && retenciones > 0) {
+        return `${base} Las letras equivalen al total menos ${formatCOPParaExcepciones(diferencia)}: parece el valor a pagar con una retención de ${formatCOPParaExcepciones(diferencia)}, pero la registrada es ${formatCOPParaExcepciones(retenciones)} -- revisa cuál es la correcta en el documento.`;
+      }
+      if (diferencia > 0) {
+        return `${base} Las letras equivalen al total menos ${formatCOPParaExcepciones(diferencia)}: si el documento descuenta una retención o un abono de ese valor, regístralo.`;
+      }
+      return `${base} Puede ser un error de digitación o de imprenta del documento original.`;
     },
-    detalle: (inv) => `El valor escrito en letras ("${inv.valor_letras_texto}", ≈ ${formatCOPParaExcepciones(inv.valor_letras_numero)}) no coincide con el total en números (${formatCOPParaExcepciones(inv.valor_con_iva)}) -- puede ser un error de digitación o de imprenta del documento original.`,
   },
   {
     tipo: 'saldo_vencido',
@@ -203,7 +230,9 @@ const DEFINICIONES_EXCEPCIONES = [
   {
     tipo: 'descuadre',
     etiqueta: 'Valores no cuadran',
-    detecta: (inv) => inv.valores_descuadrados === true || inv.valores_descuadrados === 'true',
+    // En vivo con los valores actuales (antes usaba la marca guardada al
+    // crear la factura, y el aviso seguía aunque ya se hubiera corregido).
+    detecta: (inv) => valoresDescuadrados(inv),
     detalle: (inv) => {
       const sinIva = Number(inv.valor_sin_iva) || 0;
       const iva = Number(inv.valor_iva) || 0;

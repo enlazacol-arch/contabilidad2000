@@ -831,7 +831,14 @@ function renderAsientoSeccion(inv){
 function renderExcepcionesSeccion(inv){
   const excepciones = listaExcepciones(inv);
   if (excepciones.length === 0) return '';
-  const filas = excepciones.map((e) => `<div class="exc-detalle"><b>${escapeHtml(e.etiqueta)}</b>${escapeHtml(e.detalle)}</div>`).join('');
+  // El de letras ≠ números se puede dar por revisado (ej. error de
+  // imprenta del proveedor): si no, seguiría ahí aunque el contador ya
+  // confirmó que los números están bien.
+  const filas = excepciones.map((e) => `<div class="exc-detalle"><b>${escapeHtml(e.etiqueta)}</b>${escapeHtml(e.detalle)}`
+    + (e.tipo === 'letras_no_coincide' && puedeAdministrar(miRol)
+      ? ` <button type="button" class="btn ghost btn--sm" id="btnLetrasRevisado" style="margin-top:6px;">Ya lo revisé, los números están bien</button>`
+      : '')
+    + `</div>`).join('');
   return `<div class="det-seccion"><h3>Excepciones detectadas</h3>${filas}</div>`;
 }
 
@@ -906,6 +913,9 @@ function renderDetalle(){
     alCambiar: (mes) => guardarMesContable(inv.id, mes),
   });
   if (mesInput && !puedeAdministrar(miRol)) mesInput.disabled = true;
+
+  const btnLetrasRevisado = document.getElementById('btnLetrasRevisado');
+  if (btnLetrasRevisado) btnLetrasRevisado.addEventListener('click', () => marcarLetrasRevisado(inv.id, btnLetrasRevisado));
 
   const btnEditarAsiento = document.getElementById('btnEditarAsiento');
   if (btnEditarAsiento) btnEditarAsiento.addEventListener('click', () => {
@@ -1112,6 +1122,26 @@ async function guardarFactura(invoiceId, btn){
 // igual pero el asiento se queda "Propuesto" hasta que el contador lo
 // corrija desde "Editar asiento" -- ahí mismo se aprueba solo apenas
 // cuadre, sin un botón "Aprobar asiento" aparte que recordar pulsar.
+async function marcarLetrasRevisado(invoiceId, btn){
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/invoices/${invoiceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ letras_revisado: true }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+    const idx = allInvoices.findIndex((i) => i.id === invoiceId);
+    if (idx !== -1) allInvoices[idx] = { ...allInvoices[idx], ...data };
+    renderDetalle();
+    Aviso.mostrar('Listo -- el aviso del valor en letras no se vuelve a mostrar para esta factura.');
+  } catch (err) {
+    btn.disabled = false;
+    Aviso.mostrar('No se pudo marcar como revisado: ' + err.message, { tipo: 'error' });
+  }
+}
+
 async function guardarMesContable(invoiceId, mes){
   try {
     const res = await fetch(`/api/invoices/${invoiceId}`, {
