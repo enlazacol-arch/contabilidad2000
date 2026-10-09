@@ -845,6 +845,7 @@ async function cargarPucClienteYRefrescar(clienteId){
   }
   if (typeof window._refrescarSubcuentaGastoSelector === 'function') {
     window._refrescarSubcuentaGastoSelector();
+    aplicarSubcuentaRestaurada();
   }
   // El desglose por ítem (Fase 4) también ofrece el PUC personalizado
   // línea por línea -- si ya está dibujado, se vuelve a pintar con la
@@ -1193,6 +1194,9 @@ function detectClient(data){
   if (clientePreseleccionado) {
     const c = clientePreseleccionado;
     const clasif = clasificarMovimiento(data, myClients, { clienteFijo: c });
+    // NIT/nombre del lado del cliente vacíos o mal leídos: se completan
+    // con los de su ficha antes de dibujar los campos (ver movimiento.js).
+    aplicarCorreccionesCliente(data, clasif);
     avisoMovimiento = clasif.aviso || '';
     const esComprador = clasif.motivo === 'adquiriente';
     const esVendedor = clasif.motivo === 'emisor';
@@ -1218,6 +1222,7 @@ function detectClient(data){
   // ADQUIRIENTE (compró), ingreso si es el EMISOR (vendió). Compara los
   // NIT normalizados -- antes "900.123.456-7" no coincidía con "900123456".
   const clasif = clasificarMovimiento(data, myClients);
+  aplicarCorreccionesCliente(data, clasif);
   avisoMovimiento = clasif.aviso || '';
   const asComprador = clasif.motivo === 'adquiriente' ? clasif.cliente : null;
   const asVendedor = clasif.motivo === 'emisor' ? clasif.cliente : null;
@@ -1264,6 +1269,111 @@ function detectClient(data){
 // que entrara a escanear para ese mismo cliente.)
 let colaCapturas = [];
 let capturaAbiertaId = null; // cuál de la lista está mostrada ahora mismo en el formulario
+// De cuál captura es lo que está dibujado AHORA en el formulario. Antes,
+// abrir otra captura (o volver a tocar la misma, o que terminara de
+// leerse otra foto de la cola) redibujaba el formulario con los datos
+// ORIGINALES de la IA: todo lo que el contador había corregido --
+// retenciones incluidas -- se perdía sin aviso y se guardaba lo de la
+// IA. Ahora lo editado se guarda en la captura (entry.edicion) antes de
+// salir de ella, y se vuelve a poner al regresar.
+let formularioPintadoDe = null;
+// Subcuenta que el contador ya tenía elegida al volver a una captura --
+// el PUC del cliente se carga después (asíncrono) y repoblaría el
+// selector con la sugerida; ver cargarPucClienteYRefrescar().
+let subcuentaRestaurada = null;
+
+function capturarEdicionFormulario(){
+  const valores = {};
+  ledger.querySelectorAll('input[data-key], select[data-key], textarea[data-key]').forEach((el) => {
+    valores[el.dataset.key] = el.value;
+  });
+  const subManual = document.getElementById('subcuentaGastoManual');
+  return {
+    valores,
+    items: JSON.parse(JSON.stringify(currentItems || [])),
+    clienteId: currentClienteId,
+    tipoMovimiento: currentTipoMovimiento,
+    tarifaIcaId: currentTarifaIcaId,
+    subcuentaGasto: currentSubcuentaGasto,
+    subcuentaManual: !!(subManual && subManual.style.display !== 'none'),
+    reteFuenteTocado,
+    reteIvaTocado,
+  };
+}
+
+// Guarda lo editado de la captura que está dibujada, si es una lista
+// para revisar (las demás no tienen formulario que conservar).
+function guardarEdicionCapturaPintada(){
+  if (formularioPintadoDe === null) return;
+  const entry = colaCapturas.find((c) => c.id === formularioPintadoDe);
+  if (entry && entry.estado === 'lista' && resultEl.classList.contains('show')) {
+    entry.edicion = capturarEdicionFormulario();
+  }
+}
+
+function aplicarSubcuentaRestaurada(){
+  if (!subcuentaRestaurada) return;
+  const sel = document.getElementById('subcuentaGastoSelect');
+  const manual = document.getElementById('subcuentaGastoManual');
+  if (!sel || !manual) return;
+  const { valor, esManual } = subcuentaRestaurada;
+  if (esManual) {
+    sel.style.display = 'none';
+    manual.style.display = '';
+    manual.value = valor;
+  } else if (valor) {
+    if (![...sel.options].some((o) => o.value === valor)) {
+      const opt = document.createElement('option');
+      opt.value = valor;
+      opt.textContent = valor;
+      sel.insertBefore(opt, sel.firstChild);
+    }
+    sel.style.display = '';
+    manual.style.display = 'none';
+    sel.value = valor;
+  }
+  currentSubcuentaGasto = valor;
+}
+
+// Vuelve a poner sobre el formulario recién dibujado (con los datos de
+// la IA) lo que el contador ya había corregido en esta captura.
+function restaurarEdicionFormulario(ed, data){
+  // Campos de la ficha: se disparan sus eventos para que se recalcule
+  // lo que depende de ellos (saldo pendiente, perfil fiscal del NIT...).
+  Object.entries(ed.valores || {}).forEach(([key, valor]) => {
+    const el = ledger.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    if (!el || el.value === valor) return;
+    el.value = valor;
+    el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+  });
+
+  if (ed.clienteId && (ed.clienteId !== currentClienteId || ed.tipoMovimiento !== currentTipoMovimiento)) {
+    const cliente = myClients.find((c) => c.id === ed.clienteId);
+    if (cliente) {
+      currentClienteId = cliente.id;
+      currentTipoMovimiento = ed.tipoMovimiento;
+      renderMovConfirmed(ed.tipoMovimiento, cliente.nombre, data);
+      cargarPucClienteYRefrescar(cliente.id);
+    }
+  }
+
+  currentItems = ed.items || [];
+  if (typeof desgloseDesdeItems === 'function' && currentItems.length > 0) {
+    currentDesgloseCategorias = desgloseDesdeItems(currentItems);
+  }
+  renderItemsPanel();
+
+  subcuentaRestaurada = { valor: ed.subcuentaGasto || '', esManual: !!ed.subcuentaManual };
+  if (typeof window._refrescarSubcuentaGastoSelector === 'function') window._refrescarSubcuentaGastoSelector();
+  aplicarSubcuentaRestaurada();
+
+  // Al final: los eventos de arriba marcan "tocado" a cualquier campo
+  // de retención que se haya repuesto -- se deja exactamente como estaba.
+  currentTarifaIcaId = ed.tarifaIcaId || '';
+  reteFuenteTocado = !!ed.reteFuenteTocado;
+  reteIvaTocado = !!ed.reteIvaTocado;
+  actualizarEstimadosRetencion();
+}
 let procesandoCaptura = false;
 let siguienteCapturaId = 1;
 const colaInfoEl = document.getElementById('colaInfo');
@@ -1474,6 +1584,7 @@ function quitarCaptura(id){
   eliminarCapturaDeDB(quitada);
   if (capturaAbiertaId === id) {
     capturaAbiertaId = null;
+    formularioPintadoDe = null;
     previewWrap.classList.remove('show');
     resultEl.classList.remove('show');
     errEl.classList.remove('show');
@@ -1524,6 +1635,8 @@ function reintentarCapturaAbierta(forzar){
   // releer, se guarda la nueva (ver guardarCapturaEnDB).
   eliminarCapturaDeDB(entry);
   entry.estado = 'pendiente';
+  entry.edicion = null;
+  formularioPintadoDe = null;
   entry.__forzar = forzar;
   guardarCapturaEnDB(entry);
   renderColaCapturas();
@@ -1538,6 +1651,7 @@ function abrirCaptura(id){
   const entry = colaCapturas.find((c) => c.id === id);
   if (!entry || !entry.base64) return; // todavía convirtiéndose a base64 -- un instante
   const yaEstabaAbierta = capturaAbiertaId === id;
+  if (!yaEstabaAbierta) guardarEdicionCapturaPintada();
   capturaAbiertaId = id;
   renderColaCapturas();
 
@@ -1564,6 +1678,10 @@ function abrirCaptura(id){
 function actualizarEstadoAbierta(){
   const entry = colaCapturas.find((c) => c.id === capturaAbiertaId);
   if (!entry) return;
+  // Ya está dibujada y el contador la puede estar corrigiendo: no se
+  // vuelve a pintar (perdería lo editado).
+  if (entry.estado === 'lista' && formularioPintadoDe === entry.id && resultEl.classList.contains('show')) return;
+  formularioPintadoDe = null;
 
   currentBase64 = entry.base64;
   currentMediaType = entry.mediaType;
@@ -1599,6 +1717,8 @@ function actualizarEstadoAbierta(){
 
   if (entry.estado === 'lista') {
     renderResult(entry.data);
+    formularioPintadoDe = entry.id;
+    if (entry.edicion) restaurarEdicionFormulario(entry.edicion, entry.data);
   } else if (entry.estado === 'duplicado') {
     renderDuplicado(entry.data.factura_existente);
   } else if (entry.estado === 'error') {
@@ -1672,6 +1792,7 @@ function resetAll(){
   savedMsg.classList.remove('show');
   dupWarnEl.classList.remove('show');
   capturaAbiertaId = null;
+  formularioPintadoDe = null;
   renderColaCapturas();
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
@@ -1868,6 +1989,7 @@ function renderResult(data){
   // que se guarda en la base de datos) para que el contador lo vea ya
   // prellenado y lo pueda ajustar si el documento lo dice distinto.
   data.valor_abonado = Number(data.valor_abonado_detectado) || 0;
+  subcuentaRestaurada = null;
   currentInvoiceData = data;
   detectClient(data);
   currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
