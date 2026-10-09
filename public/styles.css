@@ -870,3 +870,8 @@ html:has(.file-modal.show, .modal-doc.show, .modal-plantilla.show, .modal-valida
 .requerido{ color:var(--err, #B42318); font-weight:700; margin-left:2px; }
 .leyenda-obligatorios{ font-size:var(--t-12, 12px); color:var(--text-3, #566D79); margin:0 0 var(--s-3, 12px); }
 .leyenda-obligatorios .requerido{ margin:0 2px 0 0; }
+
+/* Atajo del mes contable elegido ("Mes de emisión" / "Mes actual"), ver mes-contable.js */
+.mes-contable .btn.mes-atajo.activo,
+.mes-contable .btn.mes-atajo.activo:hover{ background:var(--pet-600, #0B4F6C); border-color:var(--pet-600, #0B4F6C); color:#fff; }
+.mes-contable .btn.mes-atajo.activo::before{ content:'✓ '; }

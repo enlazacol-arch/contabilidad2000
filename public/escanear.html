@@ -2544,6 +2544,12 @@ function renderResult(data){
       texto: (listaExcepciones(data).find((x) => x.tipo === 'posible_duplicado') || {}).detalle || '',
     });
   }
+  // Lectura dudosa va de PRIMERA: si los números no son confiables, todo
+  // lo demás (retenciones, asiento) se calcula sobre ellos.
+  const motivosDudosa = (typeof motivosLecturaDudosa === 'function') ? motivosLecturaDudosa(data) : [];
+  if (motivosDudosa.length > 0) {
+    avisos.unshift({ titulo: '⚠ La IA no leyó bien este documento -- revisa los valores contra la foto antes de guardar', texto: motivosDudosa.join(' ') });
+  }
   avisosDocumentoEl.innerHTML = avisos.map(a => `<div class="aviso-doc"><b>${escapeHtml(a.titulo)}</b>${escapeHtml(a.texto)}</div>`).join('');
 
   renderItemsPanel();
@@ -2781,6 +2787,8 @@ function actualizarEstimadosRetencion(){
       estIvaEl.classList.add('show');
     }
   }
+
+  if (currentItems.length > 0 && parseMoneyValue(fuenteInput.value) !== reteFuenteItemsPintada) renderItemsPanel();
 
   const ivaPorque = document.createElement('div');
   ivaPorque.className = 'fine';
@@ -3286,6 +3294,11 @@ function onItemsChanged(){
   actualizarEstimadosRetencion();
 }
 
+// Rete Fuente con la que se pintó la columna de ítems -- si la de la
+// ficha cambia (el contador la edita o el menú aplica la recomendada),
+// actualizarEstimadosRetencion() vuelve a pintar los ítems.
+let reteFuenteItemsPintada = null;
+
 function renderItemsPanel(){
   const panel = document.getElementById('itemsPanel');
   if (!panel || currentItems.length === 0) { if (panel) panel.innerHTML = ''; return; }
@@ -3323,6 +3336,10 @@ function renderItemsPanel(){
   // tarifas que él mismo fue marcando ítem por ítem.
   let totalRetencionItems = 0;
   let itemsConAiuPendiente = 0;
+  const reteFuenteInputItems = ledger.querySelector('input[data-key="rete_fuente"]');
+  const reteFuenteFicha = reteFuenteInputItems ? parseMoneyValue(reteFuenteInputItems.value) : 0;
+  const fichaSinRetencion = reteFuenteFicha === 0;
+  reteFuenteItemsPintada = reteFuenteFicha;
 
   const filas = currentItems.map((item, idx) => {
     const opciones = CATEGORIA_OPCIONES_ITEM.map(([val, label]) =>
@@ -3367,17 +3384,19 @@ function renderItemsPanel(){
     // línea por línea; el valor real de Rete Fuente se sigue registrando
     // una sola vez arriba, a partir del selector de toda la factura.
     const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(item.categoria_concepto) : [{ valor: 0, label: 'Ninguno' }];
-    const tarifaActualItem = item.tarifa_retencion !== undefined ? Number(item.tarifa_retencion) : (tarifaOpts[1] ? tarifaOpts[1].valor : 0);
+    // La Rete Fuente de la ficha manda (ver tarifaRetencionItem en retenciones.js).
+    const tarifaActualItem = tarifaRetencionItem(item, reteFuenteFicha);
     const tarifaSelectOpts = tarifaOpts.map((o) => `<option value="${o.valor}"${o.valor === tarifaActualItem ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
-    const montoTarifaItem = Math.round((Number(item.subtotal) || 0) * tarifaActualItem);
-    if (est && est.requiereAiu) {
+    const montoTarifaItem = montoRetencionItem(item, tarifaActualItem);
+    const faltaAiuItem = tarifaActualItem > 0 && montoTarifaItem === null;
+    if (faltaAiuItem) {
       itemsConAiuPendiente++;
     } else if (tarifaActualItem > 0) {
       totalRetencionItems += montoTarifaItem;
     }
-    const estTexto = est && est.requiereAiu
+    const estTexto = faltaAiuItem
       ? `<span class="item-aiu-pendiente" title="Esta línea necesita el valor de AIU para poder calcular la retención -- ingrésalo en la columna AIU.">falta AIU</span>`
-      : `<select class="it-tarifa" style="font-size:var(--t-12);">${tarifaSelectOpts}</select><div style="margin-top:2px;font-size:var(--t-12);font-style:italic;color:var(--ink-faint);">${tarifaActualItem > 0 ? '≈ $' + montoTarifaItem.toLocaleString('es-CO') : '—'}</div>`;
+      : `<select class="it-tarifa" style="font-size:var(--t-12);"${fichaSinRetencion ? ' disabled title="La Rete Fuente de la factura está en $0 -- cámbiala arriba si sí aplica."' : ''}>${tarifaSelectOpts}</select><div style="margin-top:2px;font-size:var(--t-12);font-style:italic;color:var(--ink-faint);">${tarifaActualItem > 0 ? '≈ $' + montoTarifaItem.toLocaleString('es-CO') : '—'}</div>`;
     // La columna AIU solo aplica a categorías con base especial
     // (vigilancia_aseo/servicios_temporales) -- para el resto, la
     // retención se calcula sobre el subtotal normal y no tiene sentido
@@ -3419,6 +3438,7 @@ function renderItemsPanel(){
       </div>
       <div class="items-retencion-total" title="Suma de la retención de cada línea, según la tarifa que seleccionaste ítem por ítem arriba -- informativo, no reemplaza el valor de Rete Fuente de la factura completa.">
         Retención según tarifas por ítem: <b>$${totalRetencionItems.toLocaleString('es-CO')}</b>
+        ${fichaSinRetencion ? ' <span class="fine">(la Rete Fuente de la factura está en $0)</span>' : ''}
         ${itemsConAiuPendiente > 0 ? ` <span class="fine">(${itemsConAiuPendiente} ítem${itemsConAiuPendiente > 1 ? 's' : ''} sin AIU aún -- no incluido${itemsConAiuPendiente > 1 ? 's' : ''} en esta suma)</span>` : ''}
       </div>
     </div>
@@ -3430,15 +3450,16 @@ function renderItemsPanel(){
     if (e.target.classList.contains('it-descripcion')) {
       currentItems[idx].descripcion = e.target.value;
     } else if (e.target.classList.contains('it-subtotal')) {
+      // Mientras escribe solo se guarda el dato -- antes cada tecla
+      // redibujaba la tabla y se perdía el cursor. Se recalcula todo al
+      // salir del campo (ver 'change' abajo).
       currentItems[idx].subtotal = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '') || '0';
-      onItemsChanged();
     } else if (e.target.classList.contains('it-aiu')) {
       // Vacío se guarda como '' (no como '0') -- "no se sabe" es distinto
       // de "el AIU es cero", y calcularRetencionCategoriaLinea distingue
       // exactamente ese caso (ver comentario en retenciones.js).
       const limpio = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '');
       currentItems[idx].aiu = limpio;
-      onItemsChanged();
     } else if (e.target.classList.contains('it-subcuenta')) {
       // Solo entra aquí tras elegir "Escribir código a mano" (ver 'change'
       // abajo), que cambió el <select> por un <input> de texto libre --
@@ -3449,6 +3470,10 @@ function renderItemsPanel(){
   });
   tbody.addEventListener('change', (e) => {
     const idx = Number(e.target.closest('tr').dataset.idx);
+    if (e.target.classList.contains('it-subtotal') || e.target.classList.contains('it-aiu')) {
+      onItemsChanged(); // ya terminó de escribir: se recalcula y se redibuja
+      return;
+    }
     if (e.target.classList.contains('it-categoria')) {
       currentItems[idx].categoria_concepto = e.target.value;
       // Cambiar la categoría reinicia la subcuenta a la primera opción
@@ -3665,6 +3690,12 @@ function detectarInconsistenciasValores(payload){
   // guardar -- se avisa con la misma confirmación explícita que
   // cualquier otra inconsistencia, en vez de guardar en silencio una
   // factura que iba a tener retención y terminó sin ella.
+  // Lectura dudosa, con los valores tal como quedaron (si el contador ya
+  // corrigió el número mal leído y todo cuadra, no se vuelve a preguntar).
+  if (typeof motivosLecturaDudosa === 'function' && currentInvoiceData) {
+    const motivos = motivosLecturaDudosa({ ...currentInvoiceData, ...payload, items: payload.items });
+    if (motivos.length > 0) problemas.push(`La IA no leyó bien este documento: ${motivos.join(' ')} Revisa los valores contra la foto.`);
+  }
   const reteFuenteActual = Number(payload.rete_fuente) || 0;
   const reteIvaActual = Number(payload.rete_iva) || 0;
   if ((reteFuenteActual === 0 || reteIvaActual === 0) && typeof calcularRetencionSugerida === 'function') {
