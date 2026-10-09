@@ -17,6 +17,7 @@
 <script src="/motivo-sin-retencion.js"></script>
 <script src="/copiloto-cuentas.js"></script>
 <script src="/movimiento.js"></script>
+<script src="/mes-contable.js"></script>
 <script src="/excepciones.js"></script>
 <style>
   /* En pantallas grandes el lote antes se quedaba angosto (una sola
@@ -424,6 +425,9 @@
   <div id="summaryWrap">
     <div id="summaryBody" class="summary-list"></div>
 
+    <div id="mesContableLote" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 4px;">
+      <span class="fine">Mes contable para todas las de este lote (cada una se puede cambiar en su ficha):</span>
+    </div>
     <div id="saveAllBar">
       <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión · <b id="countDuplicadas">0</b> ya existían (no se leyeron de nuevo)</span>
       <button class="btn" id="btnGuardarTodas">Guardar facturas listas</button>
@@ -953,11 +957,17 @@ function renderFichaCompleta(item, modoEdicion){
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
       ${filaAvisos}
-      <div class="fd-table">${filasCampos}${filaAvisoNit}${filaCategoria}${filaRetencion}${filaReteIva}</div>
+      <div class="fd-table">${filasCampos}<div class="fd-row"><div class="fd-label">Mes contable</div><div class="fd-value" id="masivoMesContable"></div></div>${filaAvisoNit}${filaCategoria}${filaRetencion}${filaReteIva}</div>
       <div id="itemsMiniPanel"></div>
     </div>
     <div style="font-size:var(--t-12);color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
   `;
+  // Mes contable en que se causa (lo decide el contador; ver /mes-contable.js).
+  renderSelectorMesContable(document.getElementById('masivoMesContable'), {
+    valor: d.mes_contable || '',
+    fechaFactura: d.fecha_factura,
+    alCambiar: (mes) => { const it = itemAbierto && String(itemAbierto.id) === String(item.id) ? itemAbierto : item; it.data.mes_contable = mes; guardarEdicionItem(it); },
+  });
   renderItemsMiniPanel(item);
   actualizarEstimadosRetencionMasivo();
   actualizarSaldoPendienteMasivo();
@@ -2133,7 +2143,7 @@ function renderSummary(){
       <div class="fc-campos">
         <label class="fc-campo"><span>Categoría</span><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></label>
         <label class="fc-campo"><span>Subcuenta (PUC)</span>${subcuentaCampoHtml}${notaCopiloto}</label>
-        <label class="fc-campo"><span>N.° digitación</span><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></label>
+        <label class="fc-campo"><span>N.° digitación <span class="requerido" aria-hidden="true">*</span></span><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></label>
         <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
       </div>
       ${item.errorGuardado ? `<div class="fc-mensaje fc-mensaje-error">${escapeHtml(item.errorGuardado)}</div>` : ''}
@@ -2286,6 +2296,7 @@ function construirPayloadFactura(item){
     nota_retencion: d.nota_retencion || '',
     nota_retencion_tarifa: String(d.nota_retencion_tarifa || ''),
     nota_retencion_base: d.nota_retencion_base || '',
+    mes_contable: d.mes_contable || '',
     desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
     desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),
     subcuenta_gasto: d.subcuenta_gasto || '',
@@ -2664,6 +2675,43 @@ function montarQrCelular(){
   document.getElementById('uploadZone').insertAdjacentElement('afterend', cont);
   QrCelular.montar(cont, { clientes: myClients, clienteId: clientePreseleccionado ? clientePreseleccionado.id : '' });
 }
+
+// Mes contable para TODO el lote de una vez -- lo práctico cuando llegan
+// muchas facturas tarde y todas se causan en el mismo mes. Solo toca las
+// que todavía no se guardaron; cada una se puede cambiar en su ficha.
+(function montarMesContableLote(){
+  const cont = document.getElementById('mesContableLote');
+  if (!cont) return;
+  const input = document.createElement('input');
+  input.type = 'month';
+  input.className = 'input';
+  input.setAttribute('aria-label', 'Mes contable para todo el lote');
+  input.style.maxWidth = '180px';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn ghost btn--sm';
+  btn.textContent = 'Aplicar a todas';
+  btn.addEventListener('click', () => {
+    if (!mesContableValido(input.value)) { Aviso.mostrar('Elige primero el mes contable.', { tipo: 'error' }); input.focus(); return; }
+    let n = 0;
+    lote.forEach((it) => {
+      if (!it.data || it.estado === 'guardada' || it.estado === 'error') return;
+      it.data.mes_contable = input.value;
+      guardarEdicionItem(it);
+      n++;
+    });
+    renderSummary();
+    Aviso.mostrar(`Mes contable ${nombreMesContable(input.value)} aplicado a ${n} factura${n === 1 ? '' : 's'}.`);
+  });
+  const btnActual = document.createElement('button');
+  btnActual.type = 'button';
+  btnActual.className = 'btn ghost btn--sm';
+  btnActual.textContent = `Mes actual (${nombreMesContable(mesActual())})`;
+  btnActual.addEventListener('click', () => { input.value = mesActual(); });
+  cont.appendChild(input);
+  cont.appendChild(btnActual);
+  cont.appendChild(btn);
+})();
 
 async function requireAuthAndInit(){
   try {
