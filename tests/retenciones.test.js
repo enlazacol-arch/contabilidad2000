@@ -91,7 +91,11 @@ test('perfilFiscalEfectivo: el perfil guardado en terceros fiscales aplica aunqu
   const perfilTercero = { regimen_simple: true, autorretenedor: true, declarante_renta: true };
   const inv = {}; // esta factura puntual no trae ninguna marca -- debe igual ganar por la ficha de terceros
   const efectivo = perfilFiscalEfectivo(inv, perfilTercero);
-  assert.deepEqual(efectivo, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false, noRetener: false });
+  const { regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener } = efectivo;
+  assert.deepEqual({ regimenSimple, autorretenedor, declaranteRenta, aplicaArticulo383, noRetener }, { regimenSimple: true, autorretenedor: true, declaranteRenta: true, aplicaArticulo383: false, noRetener: false });
+  // y se sabe que salió de la ficha, para explicarlo en pantalla
+  assert.equal(efectivo.origen.autorretenedor, 'ficha');
+  assert.equal(efectivo.origen.declaranteRenta, 'ficha');
 });
 
 test('perfilFiscalEfectivo: sin perfil de tercero, cae a lo leído de la factura puntual', () => {
@@ -617,4 +621,119 @@ test('AIU dentro de la línea (no en línea propia): el piso sigue siendo sobre 
   const inv = { categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 5000000, valor_aiu: 300000, nit_cc: '900333444', fecha_factura: '01/09/2026' };
   const s = RA.calcularRetencionSugerida(inv, PH, {}, null);
   assert.equal(s.bajo, Math.round(500000 * 0.02));
+});
+
+// ---------- Perfil fiscal del documento (prompt v4) y explicación ----------
+const FARO = { nombre: 'EDIFICIO FARO DE ALEJANDRIA P.H', agente_retenedor: true, agente_retenedor_iva: false, agente_retenedor_ica: true };
+const manosActivas = (extra) => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 3199963, valor_iva: 55272, fecha_factura: '15/09/2026', nit_cc: '900310662',
+    autorretenedor: false, autorretenedor_ica: true, autorretenedor_ica_municipio: 'La Estrella', responsable_iva: 'si',
+    nota_retencion: 'Retención en la fuente 2% servicio de aseo sobre AIU a partir de $105.000 o 2 UVT', nota_retencion_tarifa: 2, nota_retencion_base: 'aiu',
+    items: [
+      { descripcion: 'SERVICIO ASEO SEPTIEMBRE 2026', subtotal: 2909057, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU', subtotal: 290906, categoria_concepto: 'vigilancia_aseo' },
+    ],
+    ...extra,
+  };
+  data.items = RA.normalizarItemsDesdeIA(data);
+  data.desglose_categorias = RA.desgloseDesdeItems(data.items);
+  data.desglose_aiu = RA.desgloseAiuDesdeItems(data.items);
+  return data;
+};
+
+test('normalizarPerfilFiscalDocumento: deja tipos fijos y guarda la Rete Fuente impresa', () => {
+  const d = RA.normalizarPerfilFiscalDocumento({ autorretenedor_ica: 'true', gran_contribuyente: 'no', responsable_iva: 'Sí', nota_retencion: '  Retención 2%  sobre AIU ', nota_retencion_tarifa: '2,5%', nota_retencion_base: 'AIU', rete_fuente: 7000 });
+  assert.equal(d.autorretenedor_ica, true);
+  assert.equal(d.gran_contribuyente, false);
+  assert.equal(d.responsable_iva, 'si');
+  assert.equal(d.nota_retencion, 'Retención 2% sobre AIU');
+  assert.equal(d.nota_retencion_tarifa, 2.5);
+  assert.equal(d.nota_retencion_base, 'aiu');
+  assert.equal(d.rete_fuente_documento, 7000);
+  // sin nota no hay tarifa ni base sueltas
+  const sinNota = RA.normalizarPerfilFiscalDocumento({ nota_retencion_tarifa: 4, nota_retencion_base: 'aiu' });
+  assert.equal(sinNota.nota_retencion_tarifa, 0);
+  assert.equal(sinNota.nota_retencion_base, '');
+});
+
+test('Autorretenedor SOLO de ICA no anula la Rete Fuente (Manos Activas)', () => {
+  const s = RA.calcularRetencionSugerida(manosActivas(), FARO, {}, null);
+  assert.equal(s.bajo, 5818);
+});
+
+test('ReteICA: autorretenedor de ICA en La Estrella -> no se sugiere ReteICA allá, sí en Medellín', () => {
+  const d = manosActivas();
+  const laEstrella = { municipio: 'La Estrella', tarifa_por_mil: 7, base_uvt: 0 };
+  const medellin = { municipio: 'Medellín', tarifa_por_mil: 7, base_uvt: 0 };
+  assert.equal(RA.calcularReteIcaSugerido(d, laEstrella, FARO), null);
+  assert.ok(RA.calcularReteIcaSugerido(d, medellin, FARO).monto > 0);
+  // sin municipio en la factura: se asume que aplica donde sea
+  assert.equal(RA.calcularReteIcaSugerido({ ...d, autorretenedor_ica_municipio: '' }, medellin, FARO), null);
+});
+
+test('ReteIVA: gran contribuyente o retenedor de IVA según la FACTURA -> no se retiene', () => {
+  const cliente = { agente_retenedor_iva: true };
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
+  assert.equal(RA.calcularReteIvaSugerido(inv, cliente, null), 28500);
+  assert.equal(RA.calcularReteIvaSugerido({ ...inv, gran_contribuyente: true }, cliente, null), null);
+  assert.equal(RA.calcularReteIvaSugerido({ ...inv, agente_retencion_iva: true }, cliente, null), null);
+  assert.equal(RA.calcularReteIvaSugerido({ ...inv, responsable_iva: 'no' }, cliente, null), null);
+});
+
+test('Nota del proveedor con una tarifa legal de la categoría: se recomienda esa (persona natural -> sin rango)', () => {
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, fecha_factura: '01/09/2026', nit_cc: '43123456', nota_retencion: 'Favor practicar retención del 6%', nota_retencion_tarifa: 6 };
+  const s = RA.calcularRetencionSugerida(inv, PH, {}, null);
+  assert.equal(s.mismaTarifa, true);
+  assert.equal(s.bajo, 60000);
+  // una tarifa que no es de la categoría no se usa para recomendar
+  const otra = RA.calcularRetencionSugerida({ ...inv, nota_retencion_tarifa: 7 }, PH, {}, null);
+  assert.equal(otra.mismaTarifa, false);
+  // la tarifa que ya confirmó el contador sigue mandando sobre la nota
+  const aprendida = RA.calcularRetencionSugerida(inv, PH, { '43123456|servicios': 0.04 }, null);
+  assert.equal(aprendida.bajo, 40000);
+});
+
+test('explicarRetenciones: Manos Activas -- recomendada 2% sobre el AIU y el porqué', () => {
+  const e = RA.explicarRetenciones(manosActivas(), FARO, {}, null);
+  assert.equal(e.fuente.aplica, true);
+  assert.equal(e.fuente.recomendado, 5818);
+  const texto = e.fuente.razones.join(' | ');
+  assert.match(texto, /2% sobre el AIU de \$290\.906 = \$5\.818/);
+  assert.match(texto, /lo indica el proveedor en la factura/);
+  assert.match(texto, /Supera la base mínima de 2 UVT/);
+  assert.match(texto, /La factura dice: «Retención en la fuente 2%/);
+  assert.ok(e.perfilProveedor.some((p) => /Autorretenedor de ICA en La Estrella/.test(p)));
+  assert.ok(e.perfilProveedor.some((p) => /Declara renta \(por su NIT de persona jurídica\)/.test(p)));
+  assert.deepEqual(e.perfilCliente, ['Agente retenedor de renta: sí', 'de IVA: no', 'de ICA: sí']);
+  assert.match(e.iva.razon, /no es agente de retención de IVA/);
+  assert.match(e.ica.razon, /autorretenedor de ICA en La Estrella/);
+});
+
+test('explicarRetenciones: cliente que no es agente retenedor -> "Ninguno" y por qué, con opción de retener a mano', () => {
+  const e = RA.explicarRetenciones(manosActivas(), { ...FARO, agente_retenedor: false }, {}, null);
+  assert.equal(e.fuente.aplica, false);
+  assert.equal(e.fuente.recomendado, 0);
+  assert.match(e.fuente.razones[0], /no es agente retenedor de renta/);
+  assert.equal(e.fuente.opcionesManuales[0].valor, 5818); // 2% sobre el AIU, no sobre el total
+});
+
+test('explicarRetenciones: autorretenedor de RENTA según la factura -> no aplica, y lo dice', () => {
+  const e = RA.explicarRetenciones(manosActivas({ autorretenedor: true }), FARO, {}, null);
+  assert.equal(e.fuente.aplica, false);
+  assert.match(e.fuente.razones[0], /autorretenedor de renta \(según la factura\)/);
+});
+
+test('explicarRetenciones: bajo la base mínima -> explica la base en UVT', () => {
+  const e = RA.explicarRetenciones({ categoria_concepto: 'compras', valor_sin_iva: 300000, fecha_factura: '01/09/2026', nit_cc: '900111222' }, PH, {}, null);
+  assert.equal(e.fuente.aplica, false);
+  assert.match(e.fuente.razones[0], /no supera la base mínima de \d+ UVT/);
+});
+
+test('explicarRetenciones: persona natural sin ficha -> rango declarante / no declarante explicado', () => {
+  const e = RA.explicarRetenciones({ categoria_concepto: 'servicios', valor_sin_iva: 1000000, fecha_factura: '01/09/2026', nit_cc: '43123456' }, PH, {}, null);
+  assert.equal(e.fuente.aplica, true);
+  assert.match(e.fuente.razones[0], /no se sabe si el proveedor declara renta: 4% si declara, 6% si no/);
+  const opciones = RA.opcionesRetencionFuente('servicios', e.fuente.sugerido);
+  assert.equal(opciones.length, 2);
 });
