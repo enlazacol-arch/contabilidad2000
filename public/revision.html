@@ -44,7 +44,31 @@
     font-family:var(--font-ui); font-size:var(--t-12); color:var(--ink-soft); cursor:pointer;
   }
   .cola-filtro-exc input{ accent-color:var(--pet-600); cursor:pointer; width:16px; height:16px; }
+  .cola-cliente-sel{ margin-top:10px; }
+  .cola-cliente-sel select{
+    width:100%; min-height:40px; font-family:var(--font-ui); font-size:var(--t-14);
+    padding:var(--s-2) var(--s-3); border:1px solid var(--border-strong); border-radius:var(--r-sm); background:var(--surface); color:var(--text);
+  }
+  .cola-cliente-sel select:focus{ outline:none; border-color:var(--pet-600); box-shadow:var(--focus-ring); }
   .cola-lista{ max-height:640px; overflow-y:auto; }
+
+  /* Pendientes agrupadas por cliente de la firma -- cada cliente es un
+     encabezado desplegable con sus facturas debajo. */
+  .cola-grupo-head{
+    display:flex; align-items:center; gap:8px; width:100%; text-align:left; cursor:pointer;
+    padding:10px 16px; border:none; border-bottom:1px solid var(--line);
+    background:var(--paper-sunken); font-family:var(--font-ui);
+    position:sticky; top:0; z-index:1;
+  }
+  .cola-grupo-head:hover{ background:var(--pet-50); }
+  .cola-grupo-head:focus-visible{ outline:none; box-shadow:var(--focus-ring); }
+  .cola-grupo-chevron{ flex-shrink:0; color:var(--ink-faint); transition:transform var(--dur-1) var(--ease); }
+  .cola-grupo-head[aria-expanded="true"] .cola-grupo-chevron{ transform:rotate(90deg); }
+  .cola-grupo-info{ flex:1 1 auto; min-width:0; }
+  .cola-grupo-nombre{ display:block; font-weight:800; font-size:var(--t-13); color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cola-grupo-sub{ display:block; font-family:var(--font-num); font-size:var(--t-12); color:var(--ink-faint); margin-top:1px; }
+  .cola-grupo .cola-item{ padding-left:30px; }
+  .cola-grupo-items[hidden]{ display:none; }
   .cola-item{
     display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
     padding:12px 16px; border-bottom:1px solid var(--line);
@@ -209,6 +233,11 @@
     <div class="cola">
       <div class="cola-head">
         <div class="cola-titulo">Pendientes <span class="cola-count" id="colaCount">0</span></div>
+        <div class="cola-cliente-sel">
+          <select id="colaCliente" aria-label="Filtrar por cliente">
+            <option value="">Todos los clientes</option>
+          </select>
+        </div>
         <div class="cola-buscar"><input type="text" id="colaBuscar" placeholder="Buscar por nombre o NIT…"></div>
         <label class="cola-filtro-exc">
           <input type="checkbox" id="colaSoloExcepciones">
@@ -314,12 +343,30 @@ function parseConfianza(inv){
 
 let soloConExcepciones = false;
 
-// ?cliente=ID (desde la ficha del cliente): solo las de ese cliente.
-const clienteFiltroRevision = new URLSearchParams(window.location.search).get('cliente');
+// Clientes de la firma (ya recortados por el servidor a los que este
+// usuario puede ver) -- para ponerle nombre a cada grupo de la cola.
+let clientes = [];
+// Filtro por cliente: '' = todos. ?cliente=ID (desde la ficha del
+// cliente) lo deja preseleccionado.
+let filtroCliente = new URLSearchParams(window.location.search).get('cliente') || '';
+// Grupos de cliente desplegados en la cola (clave = cliente_id, o
+// SIN_CLIENTE). Se recuerda entre re-renders para no cerrar lo que el
+// contador abrió cada vez que aprueba o edita una factura.
+const SIN_CLIENTE = '__sin_cliente__';
+const gruposAbiertos = new Set();
+
+function claveCliente(inv){
+  return inv.cliente_id || SIN_CLIENTE;
+}
+function nombreCliente(clave){
+  if (clave === SIN_CLIENTE) return 'Sin cliente asignado';
+  const c = clientes.find((x) => x.id === clave);
+  return c ? c.nombre : 'Cliente no encontrado';
+}
 
 function pendientesFiltradas(){
   let pendientes = allInvoices.filter((inv) => !inv.aprobado_por_contador);
-  if (clienteFiltroRevision) pendientes = pendientes.filter((inv) => inv.cliente_id === clienteFiltroRevision);
+  if (filtroCliente) pendientes = pendientes.filter((inv) => claveCliente(inv) === filtroCliente);
   if (soloConExcepciones) pendientes = pendientes.filter((inv) => listaExcepciones(inv).length > 0);
   const q = filtroTexto.trim().toLowerCase();
   if (!q) return pendientes;
@@ -334,44 +381,115 @@ function tieneCampoDudoso(inv){
   return CAMPOS_CONFIANZA_UI.some((c) => conf[c.key] !== undefined && conf[c.key] < UMBRAL_BAJA_CONFIANZA);
 }
 
+// Agrupa las pendientes por cliente, en orden alfabético por nombre de
+// cliente; "Sin cliente asignado" siempre al final.
+function agruparPorCliente(lista){
+  const grupos = new Map();
+  lista.forEach((inv) => {
+    const clave = claveCliente(inv);
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(inv);
+  });
+  return [...grupos.entries()]
+    .map(([clave, facturas]) => ({ clave, nombre: nombreCliente(clave), facturas }))
+    .sort((a, b) => {
+      if (a.clave === SIN_CLIENTE) return 1;
+      if (b.clave === SIN_CLIENTE) return -1;
+      return a.nombre.localeCompare(b.nombre, 'es');
+    });
+}
+
+function colaItemHtml(inv){
+  const dudoso = tieneCampoDudoso(inv);
+  const excepciones = listaExcepciones(inv);
+  const excTitle = excepciones.map((e) => e.etiqueta).join(' · ');
+  return `<button type="button" class="cola-item ${inv.id === seleccionadaId ? 'activo' : ''}" data-id="${inv.id}">
+    <div class="ci-top">
+      <span class="ci-nombre">${escapeHtml(inv.nombre_razon_social) || 'Sin nombre'}</span>
+      <span class="ci-monto">${formatCOP(inv.valor_con_iva)}</span>
+    </div>
+    <div class="ci-meta">
+      <span>${escapeHtml(inv.fecha_factura) || '—'}</span>
+      ${dudoso ? '<span class="ci-badge dudoso">⚠ revisar</span>' : ''}
+      ${excepciones.length > 0 ? `<span class="exc-badge" title="${escapeHtml(excTitle)}">⚠ ${excepciones.length === 1 ? excepciones[0].etiqueta : excepciones.length + ' excepciones'}</span>` : ''}
+    </div>
+  </button>`;
+}
+
+// Opciones del selector de cliente: solo los clientes que tienen
+// pendientes (más el que esté elegido, aunque ya no le queden), con
+// cuántas tiene cada uno.
+function renderSelectorCliente(){
+  const pendientes = allInvoices.filter((inv) => !inv.aprobado_por_contador);
+  const conteo = new Map();
+  pendientes.forEach((inv) => conteo.set(claveCliente(inv), (conteo.get(claveCliente(inv)) || 0) + 1));
+  if (filtroCliente && !conteo.has(filtroCliente)) conteo.set(filtroCliente, 0);
+  const opciones = agruparPorCliente([...conteo.keys()].map((clave) => ({ cliente_id: clave === SIN_CLIENTE ? null : clave })))
+    .map((g) => `<option value="${escapeHtml(g.clave)}" ${g.clave === filtroCliente ? 'selected' : ''}>${escapeHtml(g.nombre)} (${conteo.get(g.clave)})</option>`)
+    .join('');
+  document.getElementById('colaCliente').innerHTML =
+    `<option value="" ${!filtroCliente ? 'selected' : ''}>Todos los clientes (${pendientes.length})</option>${opciones}`;
+}
+
 function renderCola(){
   const lista = pendientesFiltradas();
   document.getElementById('colaCount').textContent = allInvoices.filter((i) => !i.aprobado_por_contador).length;
+  renderSelectorCliente();
+
+  // Si la que estaba seleccionada ya se aprobó (o dejó de coincidir con
+  // el filtro), no la dejamos "seleccionada" señalando al vacío. Se
+  // sigue con la siguiente del mismo cliente; si ya no le quedan, con la
+  // primera según el orden en que se ve (grupo por grupo).
+  const grupos = agruparPorCliente(lista);
+  if (!seleccionadaId || !lista.find((i) => i.id === seleccionadaId)) {
+    const anterior = allInvoices.find((i) => i.id === seleccionadaId);
+    const mismoCliente = anterior && grupos.find((g) => g.clave === claveCliente(anterior));
+    const siguiente = mismoCliente ? mismoCliente.facturas[0] : (grupos.length > 0 ? grupos[0].facturas[0] : null);
+    seleccionadaId = siguiente ? siguiente.id : null;
+  }
+  // El grupo de la factura seleccionada siempre queda desplegado, para
+  // que se vea cuál se está revisando.
+  const seleccionada = lista.find((i) => i.id === seleccionadaId);
+  if (seleccionada) gruposAbiertos.add(claveCliente(seleccionada));
 
   if (lista.length === 0) {
     const vacioMsg = filtroTexto
       ? 'Ninguna pendiente coincide con la búsqueda.'
       : (soloConExcepciones ? 'Ninguna pendiente tiene excepciones -- todas están limpias 🎉' : 'No hay facturas pendientes 🎉');
     document.getElementById('colaLista').innerHTML = `<div class="cola-vacia">${vacioMsg}</div>`;
-  } else {
-    document.getElementById('colaLista').innerHTML = lista.map((inv) => {
-      const dudoso = tieneCampoDudoso(inv);
-      const excepciones = listaExcepciones(inv);
-      const excTitle = excepciones.map((e) => e.etiqueta).join(' · ');
-      return `<button type="button" class="cola-item ${inv.id === seleccionadaId ? 'activo' : ''}" data-id="${inv.id}">
-        <div class="ci-top">
-          <span class="ci-nombre">${escapeHtml(inv.nombre_razon_social) || 'Sin nombre'}</span>
-          <span class="ci-monto">${formatCOP(inv.valor_con_iva)}</span>
-        </div>
-        <div class="ci-meta">
-          <span>${escapeHtml(inv.fecha_factura) || '—'}</span>
-          ${dudoso ? '<span class="ci-badge dudoso">⚠ revisar</span>' : ''}
-          ${excepciones.length > 0 ? `<span class="exc-badge" title="${escapeHtml(excTitle)}">⚠ ${excepciones.length === 1 ? excepciones[0].etiqueta : excepciones.length + ' excepciones'}</span>` : ''}
-        </div>
-      </button>`;
-    }).join('');
+    return;
   }
 
-  // Si la que estaba seleccionada ya se aprobó (o dejó de coincidir con
-  // el filtro), no la dejamos "seleccionada" señalando al vacío.
-  if (seleccionadaId && !lista.find((i) => i.id === seleccionadaId)) {
-    seleccionadaId = lista.length > 0 ? lista[0].id : null;
-  } else if (!seleccionadaId && lista.length > 0) {
-    seleccionadaId = lista[0].id;
-  }
+  // Con búsqueda escrita, o con un solo cliente a la vista, se despliega
+  // todo -- esconder resultados detrás de un clic no ayuda.
+  const desplegarTodo = filtroTexto.trim() !== '' || grupos.length === 1;
+  document.getElementById('colaLista').innerHTML = grupos.map((g) => {
+    const abierto = desplegarTodo || gruposAbiertos.has(g.clave);
+    const total = g.facturas.reduce((s, inv) => s + (Number(inv.valor_con_iva) || 0), 0);
+    const n = g.facturas.length;
+    const idItems = 'grupo-' + g.clave;
+    return `<div class="cola-grupo">
+      <button type="button" class="cola-grupo-head" data-grupo="${escapeHtml(g.clave)}" aria-expanded="${abierto}" aria-controls="${escapeHtml(idItems)}">
+        <svg class="cola-grupo-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="cola-grupo-info">
+          <span class="cola-grupo-nombre">${escapeHtml(g.nombre)}</span>
+          <span class="cola-grupo-sub">${n} ${n === 1 ? 'factura' : 'facturas'} · ${formatCOP(total)}</span>
+        </span>
+      </button>
+      <div class="cola-grupo-items" id="${escapeHtml(idItems)}" ${abierto ? '' : 'hidden'}>
+        ${g.facturas.map(colaItemHtml).join('')}
+      </div>
+    </div>`;
+  }).join('');
 }
 
+// Factura a la que pertenecen asientoActual/itemsActuales -- si la
+// selección cambia sola (al aprobar, al filtrar por cliente o buscar),
+// renderDetalle() lo nota y carga los de la nueva.
+let asientoDeFacturaId = null;
+
 async function cargarAsientoDeFactura(invoiceId){
+  asientoDeFacturaId = invoiceId;
   asientoActual = 'cargando';
   itemsActuales = [];
   renderDetalle();
@@ -380,9 +498,12 @@ async function cargarAsientoDeFactura(invoiceId){
       fetch('/api/asientos?invoice_id=' + encodeURIComponent(invoiceId)),
       fetch('/api/invoices/' + encodeURIComponent(invoiceId) + '/items'),
     ]);
-    itemsActuales = resItems.ok ? await resItems.json() : [];
+    const items = resItems.ok ? await resItems.json() : [];
+    if (asientoDeFacturaId !== invoiceId) return; // ya se eligió otra factura
+    itemsActuales = items;
     if (!resLista.ok) throw new Error('No se pudo consultar el asiento.');
     const asientos = await resLista.json();
+    if (asientoDeFacturaId !== invoiceId) return;
     if (asientos.length === 0) { asientoActual = null; renderDetalle(); return; }
     // El más reciente primero (así lo devuelve la API) -- si hay un
     // propuesto sin aprobar, ese es el que importa revisar; si no, el
@@ -390,8 +511,11 @@ async function cargarAsientoDeFactura(invoiceId){
     const elegido = asientos.find((a) => a.estado === 'propuesto') || asientos[0];
     const resDetalle = await fetch('/api/asientos/' + elegido.id);
     if (!resDetalle.ok) throw new Error('No se pudo cargar el detalle del asiento.');
-    asientoActual = await resDetalle.json();
+    const detalle = await resDetalle.json();
+    if (asientoDeFacturaId !== invoiceId) return;
+    asientoActual = detalle;
   } catch (err) {
+    if (asientoDeFacturaId !== invoiceId) return;
     asientoActual = null;
     console.error('Error cargando el asiento de la factura:', err);
   }
@@ -678,6 +802,13 @@ function renderDetalle(){
     cont.style.display = 'none';
     return;
   }
+  if (asientoDeFacturaId !== inv.id) {
+    editandoFactura = false;
+    itemsEnEdicion = null;
+    lineasAsientoEnEdicion = null;
+    cargarAsientoDeFactura(inv.id); // vuelve a llamar a renderDetalle()
+    return;
+  }
   vacio.style.display = 'none';
   cont.style.display = 'block';
 
@@ -893,7 +1024,7 @@ async function aprobarFactura(id, btn){
     if (!res.ok) throw new Error(data.error || 'No se pudo aprobar la factura.');
     const inv = allInvoices.find((i) => i.id === id);
     if (inv) { inv.aprobado_por_contador = true; inv.aprobado_at = data.aprobado_at; }
-    seleccionadaId = null; // que renderDetalle elija la siguiente pendiente sola
+    // Ya no está pendiente: renderCola() elige sola la siguiente del mismo cliente.
     renderDetalle();
     Aviso.mostrar(data.asiento_aprobado
       ? 'Factura y asiento contable aprobados.'
@@ -939,41 +1070,54 @@ async function guardarLineasAsiento(id, btn){
 }
 
 document.getElementById('colaLista').addEventListener('click', (e) => {
+  const head = e.target.closest('.cola-grupo-head');
+  if (head) {
+    // Desplegar/plegar el grupo sin re-renderizar toda la cola.
+    const clave = head.dataset.grupo;
+    const abrir = head.getAttribute('aria-expanded') !== 'true';
+    if (abrir) gruposAbiertos.add(clave); else gruposAbiertos.delete(clave);
+    head.setAttribute('aria-expanded', String(abrir));
+    document.getElementById(head.getAttribute('aria-controls')).hidden = !abrir;
+    return;
+  }
   const item = e.target.closest('.cola-item');
-  if (!item) return;
+  if (!item || item.dataset.id === seleccionadaId) return;
   seleccionadaId = item.dataset.id;
-  asientoActual = null;
-  editandoFactura = false;
-  itemsEnEdicion = null;
-  lineasAsientoEnEdicion = null;
-  renderDetalle();
-  cargarAsientoDeFactura(seleccionadaId);
+  renderDetalle(); // carga el asiento de la nueva selección
 });
 
 let filtroTimeout = null;
 document.getElementById('colaBuscar').addEventListener('input', (e) => {
   filtroTexto = e.target.value;
   clearTimeout(filtroTimeout);
-  filtroTimeout = setTimeout(renderCola, 120);
+  filtroTimeout = setTimeout(renderDetalle, 120);
 });
 document.getElementById('colaSoloExcepciones').addEventListener('change', (e) => {
   soloConExcepciones = e.target.checked;
-  renderCola();
+  renderDetalle();
+});
+document.getElementById('colaCliente').addEventListener('change', (e) => {
+  filtroCliente = e.target.value;
+  const url = new URL(window.location.href);
+  if (filtroCliente) url.searchParams.set('cliente', filtroCliente); else url.searchParams.delete('cliente');
+  history.replaceState(null, '', url);
+  renderDetalle();
 });
 
 async function cargarDatos(){
   try {
-    const [resInv, resTarifas] = await Promise.all([
+    const [resInv, resTarifas, resClientes] = await Promise.all([
       fetch('/api/invoices?incluir_borrador=1'),
       fetch('/api/tarifas-aprendidas'),
+      fetch('/api/clients'),
     ]);
     allInvoices = resInv.ok ? await resInv.json() : [];
     tarifasAprendidas = resTarifas.ok ? await resTarifas.json() : [];
+    clientes = resClientes.ok ? await resClientes.json() : [];
 
     document.getElementById('cargando').style.display = 'none';
     document.getElementById('contenido').style.display = 'flex';
-    renderDetalle();
-    if (seleccionadaId) cargarAsientoDeFactura(seleccionadaId);
+    renderDetalle(); // también carga el asiento de la primera seleccionada
   } catch (err) {
     document.getElementById('cargando').textContent = 'No se pudo cargar la bandeja de revisión: ' + err.message;
   }
