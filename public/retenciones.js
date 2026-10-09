@@ -514,7 +514,13 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 // Si no se pasa (undefined), se devuelve el rango bajo-alto tal cual,
 // para que el contador decida a mano (comportamiento de respaldo si
 // quien llama a esta función todavía no calculó el acumulado).
-function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta, acumuladoAnualPrevio, aplicaArticulo383) {
+// `aiuEnLineaPropia`: la parte del AIU que la factura cobra en su PROPIA
+// línea (ej. "AIU ... $290.906" debajo de "Servicio aseo ... $2.909.057").
+// Esa línea ya está sumada dentro de `subtotal`, así que el piso del 10%
+// se calcula sobre el resto (el servicio) -- si no, el AIU se usaría para
+// subir su propio piso (10% de 3.199.963 en vez de 10% de 2.909.057) y la
+// retención quedaba por encima de la que el mismo proveedor liquida.
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta, acumuladoAnualPrevio, aplicaArticulo383, aiuEnLineaPropia) {
   tarifasAprendidas = tarifasAprendidas || {};
   const categoriaKey = String(categoria || '').toLowerCase();
   const configBase = TARIFAS_RETENCION[categoriaKey];
@@ -579,7 +585,8 @@ function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fech
 
   if (configBase.baseEspecial === 'aiu') {
     const aiuNum = (aiu === undefined || aiu === null || aiu === '') ? null : Number(aiu);
-    const pisoAiu = Math.round(subtotalNum * AIU_PISO_PORCENTAJE);
+    const aiuLinea = Math.min(Math.max(Number(aiuEnLineaPropia) || 0, 0), subtotalNum);
+    const pisoAiu = Math.round((subtotalNum - aiuLinea) * AIU_PISO_PORCENTAJE);
     if (aiuNum === null || isNaN(aiuNum)) {
       return {
         requiereAiu: true,
@@ -695,7 +702,8 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     let huboArticulo383 = false;
     const categoriasArticulo383 = [];
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta, acumulados[categoriaParte], perfil.aplicaArticulo383);
+      const aiuLineaPropia = (desgloseAiu[CLAVE_AIU_LINEA_PROPIA] || {})[categoriaParte];
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta, acumulados[categoriaParte], perfil.aplicaArticulo383, aiuLineaPropia);
       if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
       if (r.aplicaArticulo383) {
         huboArticulo383 = true;
@@ -1326,14 +1334,26 @@ function desgloseDesdeItems(items) {
 // declararon un AIU en al menos un ítem -- una categoría ausente aquí no
 // significa AIU=0, significa "no se sabe", y calcularRetencionCategoriaLinea
 // ya distingue eso (devuelve requiereAiu:true en vez de asumir $0).
+// Dentro del mismo objeto se marca, aparte, qué parte del AIU de cada
+// categoría vino en su PROPIA línea (descripción "AIU..." y todo su
+// subtotal es AIU) -- ver `aiuEnLineaPropia` en
+// calcularRetencionCategoriaLinea(). Va en una clave propia para no
+// cambiar la forma { categoria: monto } que ya leen las pantallas y la
+// base de datos.
+const CLAVE_AIU_LINEA_PROPIA = '_aiu_en_linea_propia';
 function desgloseAiuDesdeItems(items) {
   const desglose = {};
+  const lineaPropia = {};
   (items || []).forEach((item) => {
     const categoria = String(item.categoria_concepto || '').toLowerCase();
     if (!categoria || item.aiu === undefined || item.aiu === null || item.aiu === '') return;
     const aiu = Number(item.aiu) || 0;
     desglose[categoria] = (desglose[categoria] || 0) + aiu;
+    if (aiu > 0 && aiu === (Number(item.subtotal) || 0) && ES_LINEA_AIU.test(String(item.descripcion || ''))) {
+      lineaPropia[categoria] = (lineaPropia[categoria] || 0) + aiu;
+    }
   });
+  if (Object.keys(lineaPropia).length > 0) desglose[CLAVE_AIU_LINEA_PROPIA] = lineaPropia;
   return desglose;
 }
 

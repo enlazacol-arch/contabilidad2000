@@ -572,3 +572,49 @@ test('cuenta por proveedor y concepto: GAMOEZ vende aseo, papelería y piscina, 
   assert.equal(R.subcuentaAprendida('901627469', 'compras', 'BOSQUES', 'ARTICULO NUEVO'), '51451022');
   R.registrarSubcuentasAprendidas({}); R.registrarHistorialSubcuentas([]);
 });
+
+// ---------- AIU en su propia línea: el piso del 10% es sobre el servicio ----------
+// La línea de AIU ya está sumada en el subtotal; si el piso se calculaba
+// sobre ese total, el AIU subía su propio piso y la retención quedaba por
+// encima de la que liquida el proveedor (decisión del 9 de oct. 2026).
+
+test('AIU en línea propia: Manos Activas SI 43076 -- 2% sobre el AIU, igual que la factura', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 3199963, valor_iva: 55272, fecha_factura: '15/09/2026', nit_cc: '900310662',
+    items: [
+      { descripcion: 'SERVICIO ASEO SEPTIEMBRE 2026', subtotal: 2909057, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU', subtotal: 290906, categoria_concepto: 'vigilancia_aseo' },
+    ],
+  };
+  const s = sugerirConItems(data);
+  assert.equal(s.bajo, 5818); // 2% x 290.906 (antes: 6.400 = 2% x 10% de 3.199.963)
+  assert.equal(data.desglose_aiu._aiu_en_linea_propia.vigilancia_aseo, 290906);
+});
+
+test('AIU en línea propia: Limpieza y Soluciones -- 2% sobre el AIU de 10% del servicio', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 11915111, valor_iva: 205806, fecha_factura: '10/07/2026', nit_cc: '900937794',
+    items: [
+      { descripcion: 'SERVICIO INTEGRAL DE ASEO Y CAFETERIA', subtotal: 10831919, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU (Servicio Aseo)', subtotal: 1083192, categoria_concepto: 'vigilancia_aseo' },
+    ],
+  };
+  assert.equal(sugerirConItems(data).bajo, 21664); // 2% x 1.083.192 (antes: 23.830)
+});
+
+test('AIU en línea propia por debajo del 10% del servicio: sigue mandando el piso', () => {
+  const data = {
+    categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 1050000, valor_iva: 9500, fecha_factura: '15/09/2026', nit_cc: '900310662',
+    items: [
+      { descripcion: 'SERVICIO ASEO', subtotal: 1000000, categoria_concepto: 'vigilancia_aseo' },
+      { descripcion: 'AIU', subtotal: 50000, categoria_concepto: 'vigilancia_aseo' },
+    ],
+  };
+  assert.equal(sugerirConItems(data).bajo, 2000); // 2% x piso 100.000 (10% de 1.000.000), no 2% x 50.000
+});
+
+test('AIU dentro de la línea (no en línea propia): el piso sigue siendo sobre el total', () => {
+  const inv = { categoria_concepto: 'vigilancia_aseo', valor_sin_iva: 5000000, valor_aiu: 300000, nit_cc: '900333444', fecha_factura: '01/09/2026' };
+  const s = RA.calcularRetencionSugerida(inv, PH, {}, null);
+  assert.equal(s.bajo, Math.round(500000 * 0.02));
+});
